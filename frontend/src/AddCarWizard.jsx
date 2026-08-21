@@ -93,7 +93,7 @@ const selectFieldStyle = {
 // Dropdown-with-free-typing combobox: shows suggestions like a <select>, but
 // lets staff type a brand/model that isn't in the list yet (a genuinely new
 // one), since <select> alone can't do that. Backed by <input list=...>.
-const Combobox = ({ label, value, onChange, options, placeholder, listId }) => (
+const Combobox = ({ label, value, onChange, options, placeholder, listId, error }) => (
   <div>
     <div style={{ fontSize: 10.5, color: C.textMuted, fontWeight: 600, marginBottom: 4 }}>{label}</div>
     <input
@@ -101,11 +101,12 @@ const Combobox = ({ label, value, onChange, options, placeholder, listId }) => (
       value={value}
       onChange={onChange}
       placeholder={placeholder}
-      style={{ ...selectFieldStyle, cursor: "text" }}
+      style={{ ...selectFieldStyle, cursor: "text", ...(error ? { borderColor: C.red } : {}) }}
     />
     <datalist id={listId}>
       {options.map(o => <option key={o} value={o} />)}
     </datalist>
+    {error && <div style={{ fontSize: 11, color: C.red, marginTop: 4 }}>{error}</div>}
   </div>
 );
 
@@ -165,8 +166,13 @@ const AddCarWizard = ({ onComplete, onClose, fleet = [] }) => {
   const [car, setCar] = useState(emptyCar());
   const [options, setOptions] = useState(null);
   const [chosen, setChosen] = useState(null);
+  const [errors, setErrors] = useState({}); // Step 1 field-level validation
 
-  const setField = (key, value) => setCar(c => ({ ...c, [key]: value }));
+  // Editing a field also clears its validation error.
+  const setField = (key, value) => {
+    setCar(c => ({ ...c, [key]: value }));
+    setErrors(e => (e[key] === undefined ? e : { ...e, [key]: undefined }));
+  };
 
   // Base brand/model catalog merged with whatever's already in the live
   // fleet — recomputed only when the fleet list actually changes.
@@ -197,12 +203,36 @@ const AddCarWizard = ({ onComplete, onClose, fleet = [] }) => {
 
   // Step 1 — Purchase & Vehicle Details. COE moved to the Compliance step, so
   // it's no longer required here.
-  const canProceedStep0 = car.plate && car.make && car.model && car.year && car.purchase;
-  // Step 2 — Compliance & Validity. Every field here (including COE Expiry) is
-  // OPTIONAL — users can continue without entering an expiry date.
-  // generateTargetOptions falls back to a default horizon when COE is blank, so
-  // nothing on this step blocks proceeding.
-  const canProceedStep1 = true;
+  // Step 1 (Purchase & Vehicle Details) validation — required fields + basic
+  // sanity (valid year, non-negative amounts, advance ≤ price).
+  const validateStep0 = () => {
+    const e = {};
+    if (!String(car.plate).trim()) e.plate = "Car Plate is required";
+    const maxYr = new Date().getFullYear() + 1;
+    const yr = Number(car.year);
+    if (!String(car.year).trim()) e.year = "Year is required";
+    else if (!Number.isInteger(yr) || yr < 1980 || yr > maxYr) e.year = `Enter a year between 1980 and ${maxYr}`;
+    if (!String(car.make).trim()) e.make = "Brand is required";
+    if (!String(car.model).trim()) e.model = "Model is required";
+    if (String(car.purchase).trim() === "" || Number(car.purchase) <= 0) e.purchase = "Purchase Price must be greater than 0";
+    [["purchaseAdvance", "Purchase Advance"], ["insurance", "Insurance"], ["reg", "Registration"], ["otherCharges", "Other Charges"]].forEach(([k, l]) => {
+      if (String(car[k]).trim() !== "" && Number(car[k]) < 0) e[k] = `${l} can't be negative`;
+    });
+    if (String(car.purchase).trim() !== "" && String(car.purchaseAdvance).trim() !== "" && Number(car.purchaseAdvance) > Number(car.purchase)) {
+      e.purchaseAdvance = "Advance can't exceed Purchase Price";
+    }
+    if (!car.purchaseDate) e.purchaseDate = "Purchase Date is required";
+    return e;
+  };
+  const handleStep0Next = () => {
+    const e = validateStep0();
+    setErrors(e);
+    if (Object.keys(e).length === 0) setStep(1);
+  };
+  // Step 2 — Compliance & Validity. COE Expiry is REQUIRED (it also drives the
+  // investment horizon / target-rate math); the other validity dates stay
+  // optional, so only COE gates proceeding from this step.
+  const canProceedStep1 = !!car.coe;
 
   const handleGenerate = () => {
     // theme.js's generateTargetOptions now targets a CAGR per tier (Conservative/
@@ -253,7 +283,10 @@ const AddCarWizard = ({ onComplete, onClose, fleet = [] }) => {
 
   return (
     <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200 }} />
+      {/* Backdrop is purely visual — clicking outside the form must never
+          close it (and never discard entered data). Only the ✕ button,
+          Cancel, or a successful submit calls onClose/onComplete. */}
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200 }} />
       <div style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", background: C.surface, borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.15)", zIndex: 201, width: 560, maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 24px", borderBottom: `1px solid ${C.border}` }}>
           <div>
@@ -275,8 +308,8 @@ const AddCarWizard = ({ onComplete, onClose, fleet = [] }) => {
           {step === 0 && (
             <div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <Input label="Car Plate" value={car.plate} onChange={e => setField("plate", e.target.value)} placeholder="e.g., SBJ 4488 F" />
-                <Input label="Year" type="number" value={car.year} onChange={e => setField("year", e.target.value)} placeholder="e.g., 2024" />
+                <Input label="Car Plate" value={car.plate} onChange={e => setField("plate", e.target.value)} placeholder="e.g., SBJ 4488 F" error={errors.plate} />
+                <Input label="Year" type="number" value={car.year} onChange={e => setField("year", e.target.value)} placeholder="e.g., 2024" error={errors.year} />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
                 <Combobox label="Brand" listId="brand-options" value={car.make}
@@ -285,11 +318,12 @@ const AddCarWizard = ({ onComplete, onClose, fleet = [] }) => {
                     // Changing Brand invalidates a Model picked under the
                     // previous Brand, since models are filtered per-brand.
                     setCar(c => ({ ...c, make: value, model: brandModelMap[value]?.includes(c.model) ? c.model : "" }));
+                    setErrors(er => ({ ...er, make: undefined, model: undefined }));
                   }}
-                  options={brandOptions} placeholder="e.g., Toyota" />
+                  options={brandOptions} placeholder="e.g., Toyota" error={errors.make} />
                 <Combobox label="Model" listId="model-options" value={car.model}
                   onChange={e => setField("model", e.target.value)}
-                  options={modelOptions} placeholder="e.g., Corolla" />
+                  options={modelOptions} placeholder="e.g., Corolla" error={errors.model} />
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 6 }}>
@@ -300,16 +334,16 @@ const AddCarWizard = ({ onComplete, onClose, fleet = [] }) => {
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
-                <Input label="Purchase Price (SGD)" type="number" value={car.purchase} onChange={e => setField("purchase", e.target.value)} placeholder="e.g., 26000" />
-                <Input label="Purchase Advance (SGD)" type="number" value={car.purchaseAdvance} onChange={e => setField("purchaseAdvance", e.target.value)} placeholder="e.g., 5000" />
+                <Input label="Purchase Price (SGD)" type="number" value={car.purchase} onChange={e => setField("purchase", e.target.value)} placeholder="e.g., 26000" error={errors.purchase} />
+                <Input label="Purchase Advance (SGD)" type="number" value={car.purchaseAdvance} onChange={e => setField("purchaseAdvance", e.target.value)} placeholder="e.g., 5000" error={errors.purchaseAdvance} />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
-                <Input label="Insurance (SGD)" type="number" value={car.insurance} onChange={e => setField("insurance", e.target.value)} placeholder="e.g., 1200" />
-                <Input label="Registration (SGD)" type="number" value={car.reg} onChange={e => setField("reg", e.target.value)} placeholder="e.g., 1300" />
+                <Input label="Insurance (SGD)" type="number" value={car.insurance} onChange={e => setField("insurance", e.target.value)} placeholder="e.g., 1200" error={errors.insurance} />
+                <Input label="Registration (SGD)" type="number" value={car.reg} onChange={e => setField("reg", e.target.value)} placeholder="e.g., 1300" error={errors.reg} />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
-                <Input label="Other Charges (SGD)" type="number" value={car.otherCharges} onChange={e => setField("otherCharges", e.target.value)} placeholder="e.g., 200" />
-                <Input label="Purchase Date" type="date" value={car.purchaseDate} onChange={e => setField("purchaseDate", e.target.value)} />
+                <Input label="Other Charges (SGD)" type="number" value={car.otherCharges} onChange={e => setField("otherCharges", e.target.value)} placeholder="e.g., 200" error={errors.otherCharges} />
+                <Input label="Purchase Date" type="date" value={car.purchaseDate} onChange={e => setField("purchaseDate", e.target.value)} error={errors.purchaseDate} />
               </div>
             </div>
           )}
@@ -326,7 +360,7 @@ const AddCarWizard = ({ onComplete, onClose, fleet = [] }) => {
                 <ComplianceField label="Road Tax Expiry" value={car.roadTaxExpiry} onChange={e => setField("roadTaxExpiry", e.target.value)} />
                 <ComplianceField label="Inspection Due" value={car.inspectionExpiry} onChange={e => setField("inspectionExpiry", e.target.value)} />
               </div>
-              <ComplianceField label="COE Expiry Date (optional)" value={car.coe} onChange={e => setField("coe", e.target.value)} />
+              <ComplianceField label="COE Expiry Date *" value={car.coe} onChange={e => setField("coe", e.target.value)} />
             </div>
           )}
 
@@ -430,7 +464,7 @@ const AddCarWizard = ({ onComplete, onClose, fleet = [] }) => {
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <Btn secondary onClick={onClose}>Cancel</Btn>
-            {step === 0 && <Btn primary onClick={() => setStep(1)} disabled={!canProceedStep0} style={{ opacity: canProceedStep0 ? 1 : 0.5 }}>Next</Btn>}
+            {step === 0 && <Btn primary onClick={handleStep0Next}>Next</Btn>}
             {step === 1 && <Btn primary onClick={() => setStep(2)} disabled={!canProceedStep1} style={{ opacity: canProceedStep1 ? 1 : 0.5 }}>Next</Btn>}
             {step === 2 && <Btn primary onClick={handleGenerate}>Generate Suggestions</Btn>}
             {step === 3 && <Btn primary onClick={() => setStep(4)} disabled={!chosen} style={{ opacity: chosen ? 1 : 0.5 }}>Next</Btn>}

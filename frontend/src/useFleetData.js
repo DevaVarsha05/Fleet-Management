@@ -69,7 +69,13 @@ export const computeBookingInvoice = (b) => {
   // not the originally planned end date/time.
   const effectiveEnd = b.actualReturnAt || b.end;
   const days = (b.start && effectiveEnd) ? Math.max(0, Math.round((new Date(effectiveEnd) - new Date(b.start)) / 86400000)) : 0;
-  const rateCharge = (Number(b.rate) || 0) * days;
+  // Rental charge is the stored Total Rental Amount when present (entered in
+  // Pricing & Charges — it already accounts for hourly/short rentals and any
+  // agreed price); older bookings without it fall back to daily rate × days.
+  // Kept in sync with Booking.jsx's copy of this function.
+  const rentalRaw = b.rentalAmount;
+  const hasRental = rentalRaw !== undefined && rentalRaw !== null && String(rentalRaw).trim() !== "" && !isNaN(Number(rentalRaw));
+  const rateCharge = hasRental ? Number(rentalRaw) : (Number(b.rate) || 0) * days;
   const deliveryCharge = Number(b.deliveryCharge) || 0;
   const collectionCharge = Number(b.collectionCharge) || 0;
   const additionalDriverCharge = Number(b.additionalDriverCharge) || 0;
@@ -252,7 +258,15 @@ const computeFleetStatus = (car, bookingsWithStatus) => {
 //                   exact effective-end day itself (free from the return
 //                   time onward). A day can carry both availableFrom AND
 //                   availableUntil if one booking returns and a different
-//                   one begins that same calendar day.
+//                   one begins that same calendar day — OR if a single
+//                   booking both starts and ends within that same day (e.g.
+//                   8:00 AM–12:00 PM): the day stays "Available" overall,
+//                   blocked only for that exact window (availableUntil =
+//                   pickup time, availableFrom = return time), rather than
+//                   marking the whole day "On Rental". Two markers can only
+//                   express ONE blocked window per day, though — a third
+//                   booking touching the same day can't be fully represented
+//                   this way and may under-report a gap as available.
 // Exported so Booking.jsx renders from this, rather than re-deriving statuses itself.
 export const computeCarAvailabilityTimeline = (car, bookings, days = 10, fromDateStr) => {
   const start = fromDateStr ? new Date(fromDateStr) : new Date();
@@ -304,11 +318,23 @@ export const computeCarAvailabilityTimeline = (car, bookings, days = 10, fromDat
         const isOverdueNow = !returned && todayStr > toDateStr(b.end);
 
         if (bStart === bEffEnd) {
-          // Picked up and effectively ended within the same calendar day —
-          // can't cleanly split into "available until"/"available from"
-          // windows without knowing the exact order relative to any other
-          // same-day booking, so keep this one simple: the whole day is out.
-          if (dateStr === bStart) occupied = true;
+          // Picked up and effectively ended within the same calendar day
+          // (e.g. an 8:00 AM–12:00 PM booking) — block only that exact
+          // window, using the same availableUntil/availableFrom markers a
+          // same-day turnover between two DIFFERENT bookings already uses.
+          // The rest of the day remains bookable.
+          if (dateStr === bStart) {
+            const pickupT = timeOf(b.start);
+            const returnT = timeOf(effectiveEndSrc);
+            if (pickupT && returnT) {
+              if (startTurnoverTime === null || pickupT < startTurnoverTime) startTurnoverTime = pickupT;
+              if (turnoverTime === null || returnT > turnoverTime) turnoverTime = returnT;
+            } else {
+              // No usable time info to split on — fall back to blocking the
+              // whole day rather than guessing.
+              occupied = true;
+            }
+          }
           continue;
         }
 
@@ -568,7 +594,7 @@ export const useFleetData = () => {
     let nextNum = Math.max(...earnings.map(e => parseInt(e.id.slice(3)) || 0), 0);
     const newRecords = missing.map(b => {
       nextNum += 1;
-      const days = Math.round((new Date(b.end) - new Date(b.start)) / 86400000);
+      const inv = computeBookingInvoice(b);
       return {
         id: `ER-${String(nextNum).padStart(3, "0")}`,
         bookingId: b.id,
@@ -576,9 +602,14 @@ export const useFleetData = () => {
         customer: b.customer,
         start: b.start,
         end: b.end,
-        days,
+        days: inv.days,
         rate: b.rate,
-        total: b.rate * days,
+        // Categorises rental income in the Earnings ledger.
+        type: "Rental Earning",
+        // Rental revenue = the actual rental charge (stored Total Rental Amount
+        // when set, else rate × days) — no longer the stale rate × days, so
+        // negotiated totals and hourly rentals are recorded correctly.
+        total: inv.rateCharge,
         locked: false,
       };
     });
@@ -586,6 +617,35 @@ export const useFleetData = () => {
     newRecords.forEach(r => api.post("/earnings", r).catch(onWriteError));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookings, loaded]);
+
+  // Keep UNLOCKED earnings in sync with their booking's current invoice, so:
+  //  • older rows that stored the stale `rate × days` get corrected, and
+  //  • a rental EXTENSION (which just edits the booking's dates/total) is
+  //    reflected in Earnings automatically — the row's total grows to include it.
+  // Also backfills the "Rental Earning" type on older rows. Locked/manually
+  // adjusted rows are never touched, and only rows that actually changed are
+  // written — so once totals match it stops (no write loop).
+  useEffect(() => {
+    if (!loaded || earnings.length === 0) return;
+    const bookingById = {};
+    bookings.forEach(b => { bookingById[b.id] = b; });
+    const corrected = [];
+    earnings.forEach(e => {
+      if (e.locked) return;
+      const b = bookingById[e.bookingId];
+      if (!b) return;
+      const correctTotal = computeBookingInvoice(b).rateCharge;
+      const patch = {};
+      if (Math.abs((Number(e.total) || 0) - correctTotal) > 0.01) patch.total = correctTotal;
+      if (!e.type) patch.type = "Rental Earning";
+      if (Object.keys(patch).length) corrected.push({ id: e.id, patch });
+    });
+    if (corrected.length === 0) return;
+    const changed = new Map(corrected.map(c => [c.id, c.patch]));
+    setEarnings(prev => prev.map(e => (changed.has(e.id) ? { ...e, ...changed.get(e.id) } : e)));
+    corrected.forEach(c => api.put(`/earnings/${c.id}`, c.patch).catch(onWriteError));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, earnings, bookings]);
 
   // A car goes straight back to "Available" once one of its bookings'
   // derived status becomes "Completed" (whether that's because the end date
