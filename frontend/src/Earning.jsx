@@ -190,7 +190,7 @@ const Earning = ({ earnings = [], fleet = [], bookings = [], onAddEarning, onUpd
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: C.bg }}>
-              {["Ref", "Booking", "Car", "Customer", "Period", "Days", "Rate/Day", "Total", "Status", "Actions"].map(h => (
+              {["Ref", "Booking", "Car", "Customer", "Type", "Period", "Days", "Rate/Day", "Total", "Status", "Actions"].map(h => (
                 <th key={h} style={{ textAlign: "left", padding: "9px 12px", fontSize: 10, fontWeight: 600, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
@@ -202,6 +202,9 @@ const Earning = ({ earnings = [], fleet = [], bookings = [], onAddEarning, onUpd
                 <td style={{ padding: "11px 12px", ...mono, fontSize: 11, color: C.textMuted }}>{e.bookingId || "–"}</td>
                 <td style={{ padding: "11px 12px" }}><PlateBadge plate={e.plate} small /></td>
                 <td style={{ padding: "11px 12px", fontSize: 12, fontWeight: 600 }}>{e.customer}</td>
+                <td style={{ padding: "11px 12px" }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: C.teal, background: C.tealFaint, borderRadius: 20, padding: "3px 9px", whiteSpace: "nowrap" }}>{e.type || "Rental Earning"}</span>
+                </td>
                 <td style={{ padding: "11px 12px", fontSize: 11, color: C.textSec, whiteSpace: "nowrap" }}>{e.start} → {e.end}</td>
                 <td style={{ padding: "11px 12px", ...mono, fontSize: 11, textAlign: "center" }}>{e.days}</td>
                 <td style={{ padding: "11px 12px", ...mono, fontSize: 11 }}>SGD {e.rate}/d</td>

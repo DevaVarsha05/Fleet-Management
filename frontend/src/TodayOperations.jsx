@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { C, mono } from "./theme";
+import { C, mono, fmt } from "./theme";
 import { Card, Btn } from "./components";
 
 // Today's Operations — the day's pickups & returns, derived from bookings.
@@ -24,12 +24,13 @@ const STATUS_STYLE = {
   Completed: { color: VIZ.green, bg: tint(VIZ.green) },
 };
 
-const TodayOperations = ({ bookings = [], fleet = [], employees = [], onUpdateBooking, onOpenBooking, onNewBooking }) => {
+const TodayOperations = ({ bookings = [], fleet = [], employees = [], onUpdateBooking, onOpenBooking, onNewBooking, onAddExpense }) => {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");     // all | Pickup | Return
   const [statusFilter, setStatusFilter] = useState("all"); // all | Pending | Assigned | Completed
   const [empFilter, setEmpFilter] = useState("all");       // all | employeeId
+  const [salaryDrafts, setSalaryDrafts] = useState({});    // { [op.key]: string } — unsaved edits
 
   const empName = (id) => employees.find((e) => String(e.id) === String(id))?.name || null;
 
@@ -74,16 +75,39 @@ const TodayOperations = ({ bookings = [], fleet = [], employees = [], onUpdateBo
   const assign = (op, empId) => patchOp(op, { assignedTo: empId || null, status: op.status === "Completed" ? "Completed" : empId ? "Assigned" : "Pending" });
   const setStatus = (op, s) => patchOp(op, { status: s });
 
+  // Salary paid to the employee for this operation. Kept on the operation (for
+  // display + KPI) and posted once as a "Salary" expense so it flows into the
+  // Expenses list and the Ledger. A salaryLogged flag prevents double-posting.
+  const commitSalary = (op, v) => { if (String(op.raw.salary ?? "") !== String(v)) patchOp(op, { salary: v }); };
+  const postSalary = (op) => {
+    if (op.raw.salaryLogged) return;
+    const amount = Number(salaryDrafts[op.key] ?? op.raw.salary) || 0;
+    if (amount <= 0) { alert("Enter a salary amount first."); return; }
+    const emp = empName(op.assignedTo);
+    onAddExpense?.({
+      plate: op.plate && op.plate !== "—" ? op.plate : "General",
+      date,
+      category: "Salary",
+      desc: `Salary${emp ? ` — ${emp}` : ""} (${op.type}${op.plate && op.plate !== "—" ? ` · ${op.plate}` : ""})`,
+      amount,
+      receipt: false,
+    });
+    patchOp(op, { salary: String(amount), salaryLogged: true });
+  };
+
   // KPI figures.
   const pickups = allOps.filter((o) => o.type === "Pickup");
   const returns = allOps.filter((o) => o.type === "Return");
   const pending = allOps.filter((o) => o.status === "Pending");
   const completed = allOps.filter((o) => o.status === "Completed");
+  const salaryTotal = allOps.reduce((s, o) => s + (Number(o.raw.salary) || 0), 0);
+  const salaryLoggedCount = allOps.filter((o) => o.raw.salaryLogged).length;
   const kpis = [
     { label: "Pickup Today", value: pickups.length, sub: `${pickups.filter((o) => o.status === "Completed").length} Completed`, color: VIZ.green, icon: "🚗" },
     { label: "Return Today", value: returns.length, sub: `${returns.filter((o) => o.status === "Completed").length} Completed`, color: VIZ.blue, icon: "🔄" },
     { label: "Pending", value: pending.length, sub: `${pending.length} Awaiting`, color: VIZ.amber, icon: "⏱️" },
     { label: "Completed", value: completed.length, sub: "Today's Completed", color: VIZ.violet, icon: "✅" },
+    { label: "Salary Today", value: fmt(salaryTotal), sub: `${salaryLoggedCount} logged to Expenses`, color: VIZ.red, icon: "💵" },
   ];
 
   // Upcoming in next 2 hours (only meaningful when viewing today).
@@ -182,7 +206,7 @@ const TodayOperations = ({ bookings = [], fleet = [], employees = [], onUpdateBo
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr>{["Time", "Type", "Vehicle", "Number Plate", "Contract Duration", "Remark", "Place", "Customer", "Assigned To", "Status", "Actions"].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
+              <tr>{["Time", "Type", "Vehicle", "Number Plate", "Contract Duration", "Remark", "Place", "Customer", "Assigned To", "Status", "Salary", "Actions"].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
             </thead>
             <tbody>
               {rows.map((o) => {
@@ -213,6 +237,25 @@ const TodayOperations = ({ bookings = [], fleet = [], employees = [], onUpdateBo
                         <option value="Assigned">Assigned</option>
                         <option value="Completed">Completed</option>
                       </select>
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <input type="number" min="0"
+                          value={salaryDrafts[o.key] ?? o.raw.salary ?? ""}
+                          onChange={(e) => setSalaryDrafts((d) => ({ ...d, [o.key]: e.target.value }))}
+                          onBlur={(e) => commitSalary(o, e.target.value)}
+                          placeholder="0"
+                          style={{ ...cellSelect, width: 68 }} />
+                        {o.raw.salaryLogged ? (
+                          <span title="Logged to Expenses / Ledger" style={{ fontSize: 12, color: VIZ.green, fontWeight: 800 }}>✓</span>
+                        ) : (
+                          <button onClick={() => postSalary(o)}
+                            title="Record as a Salary expense (flows to the Ledger)"
+                            style={{ fontSize: 10, fontWeight: 700, color: VIZ.blue, background: tint(VIZ.blue), border: "none", borderRadius: 6, padding: "3px 7px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                            Log
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td style={{ padding: "10px 12px" }}>
                       <button onClick={() => onOpenBooking?.(o.bookingId)} title="View booking"

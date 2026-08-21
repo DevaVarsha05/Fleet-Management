@@ -141,7 +141,7 @@ export const Modal = ({ open, title, children, onClose, onSubmit, submitText = "
   );
 };
 
-export const Input = ({ label, value, onChange, type = "text", placeholder, ...p }) => (
+export const Input = ({ label, value, onChange, type = "text", placeholder, style, error, ...p }) => (
   <div style={{ marginBottom: 16 }}>
     {label && <label style={{ display: "block", fontSize: 12, fontWeight: 600, marginBottom: 6, color: C.textPri }}>{label}</label>}
     <input
@@ -149,9 +149,10 @@ export const Input = ({ label, value, onChange, type = "text", placeholder, ...p
       value={value}
       onChange={onChange}
       placeholder={placeholder}
-      style={{ width: "100%", padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
+      style={{ width: "100%", padding: "8px 12px", border: `1px solid ${error ? C.red : C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", outline: "none", boxSizing: "border-box", ...style }}
       {...p}
     />
+    {error && <div style={{ fontSize: 11, color: C.red, marginTop: 4 }}>{error}</div>}
   </div>
 );
 

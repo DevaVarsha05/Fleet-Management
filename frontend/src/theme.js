@@ -45,10 +45,11 @@ export const fmt = (n) => `SGD ${n.toLocaleString()}`;
 export const totalInv = (c) => c.purchase + c.insurance + c.reg + (c.otherCharges || 0);
 // Single source of truth for "today" across every date-driven calculation in
 // the app (COE/compliance countdowns here, and the target-option horizon in
-// generateTargetOptions below). Everything reads this instead of the real
-// device clock, so a demo run today and one run next month agree on the same
-// "today" and never silently drift apart.
-const APP_NOW = new Date("2026-06-27");
+// generateTargetOptions below). Uses the real current date (date-only, at UTC
+// midnight to match the app's ISO date strings) so every "days remaining" /
+// expiry status is accurate. Previously this was frozen to a fixed demo date,
+// which made all expiry countdowns read wrong once the real date moved past it.
+const APP_NOW = new Date(new Date().toISOString().slice(0, 10));
 // NOTE: `coe` (a car's registration/ownership-renewal expiry date) is a Singapore-era field
 // name kept as-is for data compatibility with existing fleet records. Every user-facing
 // label has been renamed to "Registration Expiry" — see Fleet.jsx / Alert.jsx.

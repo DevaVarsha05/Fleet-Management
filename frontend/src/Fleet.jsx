@@ -269,6 +269,10 @@ const VehicleDetailsModal = ({ car, bookings, expenses, onAddExpense, onUpdateCa
       setEditError("Enter a valid Year.");
       return;
     }
+    if (!editForm.coe) {
+      setEditError("COE Expiry Date is required.");
+      return;
+    }
     if (typeof onUpdateCar !== "function") {
       setEditError("Saving isn't wired up yet.");
       return;
@@ -363,16 +367,17 @@ const VehicleDetailsModal = ({ car, bookings, expenses, onAddExpense, onUpdateCa
                 </div>
                 <div>
                   <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, marginBottom: 3 }}>Fuel Type</div>
-                  <select value={editForm.fuelType} onChange={(e) => setEditForm({ ...editForm, fuelType: e.target.value })} style={{ ...fieldStyle, cursor: "pointer" }}>
+                  <select value={editForm.fuelType} onChange={(e) => { const v = e.target.value; setEditForm({ ...editForm, fuelType: v, transmission: v === "EV" ? "Automatic" : editForm.transmission }); }} style={{ ...fieldStyle, cursor: "pointer" }}>
                     <option value="Petrol">Petrol</option>
                     <option value="Diesel">Diesel</option>
+                    <option value="EV">EV</option>
                   </select>
                 </div>
                 <div>
                   <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, marginBottom: 3 }}>Transmission</div>
-                  <select value={editForm.transmission} onChange={(e) => setEditForm({ ...editForm, transmission: e.target.value })} style={{ ...fieldStyle, cursor: "pointer" }}>
+                  <select value={editForm.transmission} onChange={(e) => setEditForm({ ...editForm, transmission: e.target.value })} disabled={editForm.fuelType === "EV"} style={{ ...fieldStyle, cursor: "pointer" }}>
                     <option value="Automatic">Automatic</option>
-                    <option value="Manual">Manual</option>
+                    {editForm.fuelType !== "EV" && <option value="Manual">Manual</option>}
                   </select>
                 </div>
               </div>
@@ -410,7 +415,7 @@ const VehicleDetailsModal = ({ car, bookings, expenses, onAddExpense, onUpdateCa
                   <input type="date" value={editForm.inspectionExpiry} onChange={(e) => setEditForm({ ...editForm, inspectionExpiry: e.target.value })} style={fieldStyle} />
                 </div>
                 <div style={{ gridColumn: "1 / -1" }}>
-                  <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, marginBottom: 3 }}>COE Expiry</div>
+                  <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, marginBottom: 3 }}>COE Expiry *</div>
                   <input type="date" value={editForm.coe} onChange={(e) => setEditForm({ ...editForm, coe: e.target.value })} style={fieldStyle} />
                 </div>
               </div>

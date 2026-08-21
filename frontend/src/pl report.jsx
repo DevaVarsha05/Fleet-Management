@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   ResponsiveContainer, ComposedChart, BarChart, Bar, Line, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine,
@@ -18,8 +18,12 @@ const EmptyViz = ({ icon, text }) => (
   </div>
 );
 
-const PlReport = ({ fleet = [], bookings = [], earnings = [], expenses = [], calculateMetrics, calculateMonthlyMetrics, calculateCarMetrics }) => {
-  const [view, setView] = useState("fleet");
+const PlReport = ({ fleet = [], bookings = [], earnings = [], expenses = [], calculateMetrics, calculateMonthlyMetrics, calculateCarMetrics, initialView = "fleet", onInitialViewConsumed }) => {
+  const [view, setView] = useState(initialView);
+  // The initial tab may be set by a deep-link (e.g. Dashboard → Vehicle
+  // Performance opens the Utilization tab). Tell the parent once, so the next
+  // plain navigation to P&L defaults back to the Fleet view.
+  useEffect(() => { onInitialViewConsumed?.(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [selectedCar, setSelectedCar] = useState(fleet.length > 0 ? fleet[0].plate : "");
   const [month, setMonth] = useState("2026-06");
 
