@@ -13,7 +13,7 @@ import Dashboard from "./Dashboard";
 import Fleet from "./Fleet";
 import CarAvailability from "./CarAvailability";
 import Investors from "./Investors";
-import Booking, { CHARGE_TYPES } from "./Booking";
+import Booking, { CHARGE_TYPES, computeBookingInvoice } from "./Booking";
 import Customers from "./Customers";
 import TodayOperations from "./TodayOperations";
 import UserManagement from "./UserManagement";
@@ -1500,10 +1500,10 @@ export default function FleetOpzApp() {
 
   // Vehicle Handover — now lives inside Step 5 (Review) of the Edit Booking
   // flow itself, rather than a separate modal. Validates Starting Mileage /
-  // Fuel Level, flips the booking to Active, and generates the Rental
-  // Agreement immediately (no extra click needed) — same fields/behavior the
-  // old standalone handover modal used, just triggered from here instead.
-  // Completed/Closed status derivation and payment logic are untouched.
+  // Fuel Level, requires the full rental amount to already be collected,
+  // flips the booking to Active, and generates the Rental Agreement
+  // immediately (no extra click needed) — same fields/behavior the old
+  // standalone handover modal used, just triggered from here instead.
   const handleCompleteHandover = () => {
     if (!editingBookingId) return;
     const errors = validateHandoverFields();
@@ -1511,6 +1511,14 @@ export default function FleetOpzApp() {
     if (Object.keys(errors).length) return;
     const original = fleetData.bookings.find(b => b.id === editingBookingId);
     const car = fleetData.fleet.find(c => c.plate === newBookingData.plate);
+    // The Agreement can't be generated against an unpaid balance — send
+    // staff to collect the rest first (Pricing & Payment tab / Collect Full
+    // Balance Now) rather than generating it here.
+    const { balanceDue } = computeBookingInvoice(original);
+    if (balanceDue > 0) {
+      alert(`Collect the full rental amount before generating the Agreement. Balance due: ${formatSGD(balanceDue)}.`);
+      return;
+    }
     const updates = {
       status: "Active",
       startingMileage: newBookingData.startingMileage,
@@ -2723,6 +2731,7 @@ export default function FleetOpzApp() {
                         {editingBookingId && (() => {
                           const editingBooking = fleetData.bookings.find(b => b.id === editingBookingId);
                           const alreadyHandedOver = !!editingBooking?.handoverAt;
+                          const { balanceDue: editingBalanceDue } = editingBooking ? computeBookingInvoice(editingBooking) : { balanceDue: 0 };
                           return alreadyHandedOver ? (
                             <div style={{ marginTop: 18, border: `1px solid ${C.tealFaint}`, borderRadius: 10, padding: "14px 16px", background: C.tealFaint }}>
                               <div style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>✅ Vehicle Handover completed</div>
@@ -2735,7 +2744,13 @@ export default function FleetOpzApp() {
                               <div style={{ fontSize: 13, fontWeight: 700, color: C.navy, marginBottom: 4 }}>🔑 Vehicle Handover</div>
                               <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 16 }}>
                                 When the customer arrives for pickup, record the starting mileage, fuel, and condition below.
-                                Completing this moves the booking to Active and generates the Rental Agreement.
+                                The full rental amount must be collected first — collect it from Pricing &amp; Payment, then
+                                completing this moves the booking to Active and generates the Rental Agreement.
+                                {editingBalanceDue > 0 && (
+                                  <div style={{ marginTop: 8, color: "#92400e", fontWeight: 600 }}>
+                                    ⚠ Balance due: {formatSGD(editingBalanceDue)} — collect this before completing handover.
+                                  </div>
+                                )}
                               </div>
                               <div style={{ marginBottom: 14 }}>
                                 <label style={bookingFieldLabelStyle}>Starting Mileage (km) <span style={{ color: C.red }}>*</span></label>
@@ -2783,7 +2798,13 @@ export default function FleetOpzApp() {
                                   style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12, fontFamily: "inherit", outline: "none", resize: "vertical", boxSizing: "border-box" }}
                                 />
                               </div>
-                              <Btn primary onClick={handleCompleteHandover}>✅ Complete Handover</Btn>
+                              <Btn
+                                primary
+                                disabled={editingBalanceDue > 0}
+                                title={editingBalanceDue > 0 ? `Collect the full balance (${formatSGD(editingBalanceDue)}) before completing handover` : undefined}
+                                style={editingBalanceDue > 0 ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
+                                onClick={handleCompleteHandover}
+                              >✅ Complete Handover</Btn>
                             </div>
                           );
                         })()}

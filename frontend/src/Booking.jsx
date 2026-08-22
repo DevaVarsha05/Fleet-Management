@@ -212,7 +212,7 @@ export const CHARGE_TYPES = [
 //     Payments section use for Balance Due.
 // Security Deposit is intentionally excluded from both — it's refundable,
 // not a rental charge, so it's tracked as its own figure.
-const computeBookingInvoice = (b) => {
+export const computeBookingInvoice = (b) => {
   // Once a vehicle is actually returned, actualReturnAt reflects when it
   // really came back (early or late) — the invoice should bill for that,
   // not the originally planned end date/time.
@@ -571,55 +571,68 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
   }
   const STAGES = ["Upcoming", "Handover", "On Rental", "Returned", "Closed"];
 
+  // Save & Generate Agreement — now gated on the full rental amount being
+  // collected first. If a balance is still outstanding, this stops and
+  // sends staff to collect it (via Collect Rent Amount / Collect Full
+  // Balance Now above, or Record Payment) rather than generating the
+  // Agreement against an unpaid balance.
   const handleCompleteHandover = () => {
     // Handover can't happen before the customer is due to collect the car —
     // gate it on the scheduled pickup time (real clock, same basis as pickupArrived).
     if (!pickupArrived) { alert(`Vehicle Handover is allowed only at the scheduled pickup time or later (${formatDateTime(booking.start)}).`); return; }
     if (startingMileage === "" || Number(startingMileage) < 0) { alert("Enter a valid Starting Mileage"); return; }
     if (!fuelLevel) { alert("Select the Fuel Level at pickup"); return; }
-
-    // Rent at pickup — now required whenever a balance is outstanding (staff
-    // must explicitly enter what was collected, even if it's 0, before the
-    // handover can go through). Clamp to Balance Due (no overpay); a non-cash
-    // payment needs a Receipt/Reference No. It's recorded as a real payment
-    // appended to the single `payments` source of truth so Balance Due
-    // updates itself.
-    if (inv.balanceDue > 0 && rentAtPickup === "") {
-      alert(`Enter the Rent Amount collected at pickup (0 if none was collected). Balance due: ${fmt(inv.balanceDue)}.`);
+    if (inv.balanceDue > 0) {
+      alert(`Collect the full rental amount before generating the Agreement. Balance due: ${fmt(inv.balanceDue)}.`);
       return;
     }
-    const rentAmt = Math.min(Math.max(0, Number(rentAtPickup) || 0), inv.balanceDue);
-    if (rentAmt > 0 && rentMethod !== "Cash" && !rentReference.trim()) {
-      alert("Enter the Receipt / Reference No. (required unless payment method is Cash).");
-      return;
-    }
-    if (rentAmt > 0 && (!rentDate || !rentTime)) { alert("Enter the rent payment date & time"); return; }
 
-    const rentPaymentEntry = rentAmt > 0
-      ? [{
-          id: `rent-${Date.now()}`,
-          amount: rentAmt,
-          method: rentMethod,
-          reference: rentReference.trim(),
-          addedAt: `${rentDate}T${rentTime}`,
-          by: actor,
-        }]
-      : [];
     const updates = {
       startingMileage, fuelLevel, vehicleCondition, handoverAt: new Date().toISOString(), status: "Active",
-      ...(rentPaymentEntry.length ? { payments: [...inv.payments, ...rentPaymentEntry] } : {}),
-      history: withHistory(histEntry("handover", `Odometer ${startingMileage} km · Fuel ${fuelLevel}${rentAmt > 0 ? ` · Collected ${fmt(rentAmt)} (${rentMethod})` : ""}`)),
+      history: withHistory(histEntry("handover", `Odometer ${startingMileage} km · Fuel ${fuelLevel}`)),
     };
     onUpdateBooking(booking.id, updates);
     // The Rental Agreement needs mileage/fuel/condition — generate it now.
-    // This is deliberately independent of payment collection: Save & Generate
-    // Agreement never itself claims "fully collected" — that confirmation
-    // only ever comes from actually clicking Collect Full Balance Now.
+    // This call never touches `payments` itself (the balance was already
+    // confirmed clear above), so it can never mark anything as paid.
     generateRentalAgreementPdf({ ...booking, ...updates }, car);
     setShowHandover(false);
+  };
+
+  // "Collect Rent Amount" — a standalone payment action, separate from Save
+  // & Generate Agreement. Records whatever amount staff actually entered
+  // (must be > 0, up to Balance Due) as a real payment appended to the
+  // single `payments` source of truth. Doesn't touch handover/mileage/fuel/
+  // agreement — those only ever happen via Save & Generate Agreement above.
+  const handleCollectRentAmount = () => {
+    if (inv.balanceDue <= 0) return;
+    if (rentAtPickup === "") {
+      alert(`Enter the Rent Amount collected. Balance due: ${fmt(inv.balanceDue)}.`);
+      return;
+    }
+    const rentAmt = Math.min(Math.max(0, Number(rentAtPickup) || 0), inv.balanceDue);
+    if (rentAmt <= 0) { alert("Enter an amount greater than 0 to record a payment."); return; }
+    if (rentMethod !== "Cash" && !rentReference.trim()) {
+      alert("Enter the Receipt / Reference No. (required unless payment method is Cash).");
+      return;
+    }
+    if (!rentDate || !rentTime) { alert("Enter the rent payment date & time"); return; }
+
+    const newPayment = {
+      id: `rent-${Date.now()}`,
+      amount: rentAmt,
+      method: rentMethod,
+      reference: rentReference.trim(),
+      addedAt: `${rentDate}T${rentTime}`,
+      by: actor,
+    };
+    onUpdateBooking(booking.id, {
+      payments: [...inv.payments, newPayment],
+      history: withHistory(histEntry("payment", `Collected ${fmt(rentAmt)} (${rentMethod})${rentReference.trim() ? ` · Ref ${rentReference.trim()}` : ""} at pickup`)),
+    });
     setRentAtPickup("");
     setRentReference("");
-    setFullyCollectedNotice(false);
+    setFullyCollectedNotice(rentAmt >= inv.balanceDue);
   };
 
   // "Collect Now" — a standalone action separate from Save & Generate
@@ -989,10 +1002,10 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                       <textarea value={vehicleCondition} onChange={(e) => setVehicleCondition(e.target.value)} placeholder="Any scratches, dents, notes…" style={{ ...detailInputStyle, minHeight: 52, resize: "vertical" }} />
                     </div>
 
-                    {/* Rent collected at pickup — the rental amount is taken here in
-                        the deposit-first flow. Required whenever a balance is due
-                        (staff must enter what was collected, 0 if none, before
-                        handover can complete) — see handleCompleteHandover. */}
+                    {/* Rent collected at pickup — this must be settled before Save &
+                        Generate Agreement will proceed (see handleCompleteHandover's
+                        balanceDue check). Use Collect Rent Amount for a partial/exact
+                        entry or Collect Full Balance Now to settle it all in one step. */}
                     {inv.balanceDue > 0 && (
                       <div style={{ marginTop: 12, borderTop: `1px dashed ${C.border}`, paddingTop: 12 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
@@ -1001,7 +1014,7 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                         </div>
                         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
                           <div style={{ flex: "1 1 140px" }}>
-                            <div style={detailFieldLabelStyle}>Rent Amount *</div>
+                            <div style={detailFieldLabelStyle}>Rent Amount</div>
                             <input type="number" min="0" max={inv.balanceDue} value={rentAtPickup} onChange={(e) => { setRentAtPickup(e.target.value); setFullyCollectedNotice(false); }} placeholder="0.00" style={detailInputStyle} />
                           </div>
                           <div style={{ flex: "1 1 120px" }}>
@@ -1038,10 +1051,9 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                             </div>
                           );
                         })()}
-                        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>Required — enter the amount collected now (0 if none). "Collect Full Balance Now" only accepts an amount that exactly matches the balance due; any remaining balance can be collected later (e.g. at return).</div>
-                        {/* Collect Now — settles the FULL balance immediately without
-                            stepping through the rest of the handover form. */}
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+                        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>The full rental amount must be collected before the Agreement can be generated. Click "Collect Rent Amount" to record what's entered above, or "Collect Full Balance Now" to settle it all in one step.</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                          <Btn onClick={handleCollectRentAmount}>Collect Rent Amount</Btn>
                           <Btn onClick={handleCollectNow}>Collect Full Balance Now ({fmt(inv.balanceDue)})</Btn>
                           {fullyCollectedNotice && <span style={{ fontSize: 11.5, fontWeight: 600, color: C.teal }}>✓ Balance fully collected.</span>}
                         </div>
@@ -1049,7 +1061,13 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                     )}
 
                     <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                      <Btn primary onClick={handleCompleteHandover}>Save &amp; Generate Agreement</Btn>
+                      <Btn
+                        primary
+                        disabled={inv.balanceDue > 0}
+                        title={inv.balanceDue > 0 ? `Collect the full balance (${fmt(inv.balanceDue)}) before generating the Agreement` : undefined}
+                        style={inv.balanceDue > 0 ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
+                        onClick={handleCompleteHandover}
+                      >Save &amp; Generate Agreement</Btn>
                       <Btn onClick={() => setShowHandover(false)}>Cancel</Btn>
                     </div>
                   </div>
@@ -1060,7 +1078,7 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                       <div style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>Next step: Complete Vehicle Handover</div>
                       <div style={{ fontSize: 11.5, color: C.textMuted }}>
                         {pickupArrived
-                          ? "Collect the rent, record starting mileage, fuel & condition to activate the rental and generate the Rental Agreement."
+                          ? "Record starting mileage, fuel & condition, and collect the full rental amount, to activate the rental and generate the Rental Agreement."
                           : `Handover opens at the scheduled pickup time — ${formatDateTime(booking.start)}.`}
                       </div>
                     </div>
