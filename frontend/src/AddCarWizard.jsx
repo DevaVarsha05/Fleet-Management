@@ -283,10 +283,7 @@ const AddCarWizard = ({ onComplete, onClose, fleet = [] }) => {
 
   return (
     <>
-      {/* Backdrop is purely visual — clicking outside the form must never
-          close it (and never discard entered data). Only the ✕ button,
-          Cancel, or a successful submit calls onClose/onComplete. */}
-      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200 }} />
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200 }} />
       <div style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", background: C.surface, borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.15)", zIndex: 201, width: 560, maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 24px", borderBottom: `1px solid ${C.border}` }}>
           <div>

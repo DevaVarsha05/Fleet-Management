@@ -99,6 +99,26 @@ const Expenses = ({ expenses = [], fleet = [], onAddExpense, onUpdateExpense, on
     return Object.entries(map).map(([plate, amt]) => ({ plate, total: amt })).sort((a, b) => b.total - a.total).slice(0, 5);
   }, [expenses, topRange]);
 
+  // Fleet acquisition: what each car cost to buy (all-in — purchase + insurance
+  // + registration + other charges), read straight from the fleet so it's always
+  // accurate. Ranked most-expensive first for the card gallery below the KPIs.
+  const acquisition = useMemo(() => {
+    const num = (v) => Number(v) || 0;
+    const rows = fleet.map((c) => {
+      const purchase = num(c.purchase), advance = num(c.purchaseAdvance ?? c.purchase_advance),
+        insurance = num(c.insurance),
+        reg = num(c.reg), other = num(c.otherCharges ?? c.other_charges);
+      return {
+        plate: c.plate,
+        name: `${c.make || ""} ${c.model || ""}`.trim() || c.plate,
+        purchase, advance, insurance, reg, other,
+        total: purchase + advance + insurance + reg + other,
+      };
+    }).filter((r) => r.total > 0).sort((a, b) => b.total - a.total);
+    const totalInvested = rows.reduce((s, r) => s + r.total, 0);
+    return { rows, totalInvested };
+  }, [fleet]);
+
   const now = new Date();
   const curMonth = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
   const thisMonthTotal = expenses.filter((e) => monthKey(e.date) === curMonth).reduce((s, e) => s + (e.amount || 0), 0);
@@ -312,6 +332,74 @@ const Expenses = ({ expenses = [], fleet = [], onAddExpense, onUpdateExpense, on
               </ResponsiveContainer>
             )}
           </div>
+        </Card>
+
+        {/* ── FLEET ACQUISITION — what each car cost to buy ─────────────────── */}
+        <Card style={{ overflow: "hidden" }}>
+          <div style={{ padding: "16px 18px 12px", background: `linear-gradient(120deg, ${C.tealFaint} 0%, ${C.greenFaint} 55%, transparent 100%)`, borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: C.navy, display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 17 }}>🚗</span> Fleet Acquisition
+            </div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>All-in purchase cost per vehicle · purchase + insurance + registration + other</div>
+          </div>
+
+          {acquisition.rows.length === 0 ? (
+            <div style={{ padding: 24 }}><EmptyViz icon="🚗" text="Add a vehicle to see its acquisition cost here." /></div>
+          ) : (() => {
+            const { rows, totalInvested } = acquisition;
+            const avg = Math.round(totalInvested / rows.length);
+            const top = rows[0];
+            const stats = [
+              { label: "Total Invested", value: fmt(totalInvested), sub: `${rows.length} vehicles`, color: C.teal },
+              { label: "Avg / Vehicle", value: fmt(avg), sub: "acquisition cost", color: C.navy },
+              { label: "Most Expensive", value: fmt(top.total), sub: top.name, color: C.amber },
+            ];
+            return (
+              <div style={{ padding: 16 }}>
+                {/* stat strip */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
+                  {stats.map((s) => (
+                    <div key={s.label} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", background: C.bg, position: "relative", overflow: "hidden" }}>
+                      <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 3, background: s.color }} />
+                      <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.6 }}>{s.label}</div>
+                      <div style={{ ...mono, fontSize: 19, fontWeight: 800, color: s.color, marginTop: 5, letterSpacing: -0.4 }}>{s.value}</div>
+                      <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.sub}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* per-car cards */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
+                  {rows.map((r, i) => {
+                    const share = totalInvested > 0 ? (r.total / totalInvested) * 100 : 0;
+                    const hue = i < CAT_HUES.length ? CAT_HUES[i] : OTHER_HUE;
+                    return (
+                      <div key={r.plate} style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, background: C.surface, display: "flex", flexDirection: "column", gap: 8 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                          <PlateBadge plate={r.plate} small />
+                          <span style={{ ...mono, fontSize: 10, fontWeight: 700, color: hue, background: `${hue}18`, borderRadius: 20, padding: "2px 8px" }}>{share.toFixed(1)}%</span>
+                        </div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.navy, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</div>
+                        <div style={{ ...mono, fontSize: 20, fontWeight: 800, color: C.textPri, letterSpacing: -0.5 }}>{fmt(r.total)}</div>
+                        {/* share bar */}
+                        <div style={{ height: 6, background: C.bg, borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ width: `${Math.max(4, share)}%`, height: "100%", background: hue, borderRadius: 4 }} />
+                        </div>
+                        {/* breakdown */}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 10px", fontSize: 10, color: C.textMuted, marginTop: 2 }}>
+                          <span>Purchase <strong style={{ color: C.textSec }}>{fmt(r.purchase)}</strong></span>
+                          {r.advance > 0 && <span>Advance <strong style={{ color: C.textSec }}>{fmt(r.advance)}</strong></span>}
+                          {r.insurance > 0 && <span>Ins <strong style={{ color: C.textSec }}>{fmt(r.insurance)}</strong></span>}
+                          {r.reg > 0 && <span>Reg <strong style={{ color: C.textSec }}>{fmt(r.reg)}</strong></span>}
+                          {r.other > 0 && <span>Other <strong style={{ color: C.textSec }}>{fmt(r.other)}</strong></span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
         </Card>
 
         {/* Expense Records */}

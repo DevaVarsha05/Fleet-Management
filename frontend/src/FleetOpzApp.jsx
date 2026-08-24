@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { C } from "./theme";
 import { Btn, Badge, Modal, Input, Select, StatusTag } from "./components";
 import { useFleetData, buildAvailabilityConflictMessage, findCustomerByIC, computeCarAvailabilityTimeline } from "./useFleetData";
@@ -13,7 +13,7 @@ import Dashboard from "./Dashboard";
 import Fleet from "./Fleet";
 import CarAvailability from "./CarAvailability";
 import Investors from "./Investors";
-import Booking, { CHARGE_TYPES, computeBookingInvoice } from "./Booking";
+import Booking, { CHARGE_TYPES } from "./Booking";
 import Customers from "./Customers";
 import TodayOperations from "./TodayOperations";
 import UserManagement from "./UserManagement";
@@ -53,9 +53,9 @@ const FieldErr = ({ msg }) =>
 // fixed local prefix shown ahead of the editable digits and baked into the
 // stored value — Singapore's legacy format is "65" + 6 digits (8 total),
 // matching how Additional Driver contact numbers are already validated
-// elsewhere in this form (isValidContactNumber's /^65\d{6}$/).
+// elsewhere in this form (isValidContactNumber's /^65\d{8}$/).
 const CONTACT_COUNTRY_CODES = [
-  { code: "+65", country: "Singapore", flag: "🇸🇬", prefix: "65", digits: 6 },
+  { code: "+65", country: "Singapore", flag: "🇸🇬", prefix: "65", digits: 8 },
   { code: "+91", country: "India", flag: "🇮🇳", digits: 10 },
   { code: "+1", country: "US / Canada", flag: "🇺🇸", digits: 10 },
   { code: "+44", country: "United Kingdom", flag: "🇬🇧", digits: 10 },
@@ -126,12 +126,6 @@ const to24h = (hour12, minute, ampm) => {
   if (ampm === "PM") h += 12;
   return `${String(h).padStart(2, "0")}:${minute}`;
 };
-// "15:00" -> "3:00 PM" — used in validation messages that need to show a
-// time back to the user in the same 12-hour format the picker uses.
-const to12hLabel = (hhmm) => {
-  const { hour, minute, ampm } = to12h(hhmm);
-  return `${parseInt(hour, 10)}:${minute} ${ampm}`;
-};
 
 // 12-hour Pickup/Return Time control — three selects (Hour/Minute/AM-PM) in
 // place of the browser's native <input type="time">, whose AM/PM-vs-24h
@@ -170,7 +164,46 @@ const TimeInput12h = ({ value, onChange, style }) => {
 //   it are disabled, and every day from minDate through the clicked day must
 //   be Available for the click to be accepted (a real bookable range can't
 //   cross an On Rental/Maintenance day).
-const SingleDateCalendar = ({ car, bookings, label, selectedDate, minDate, onSelect, onClear }) => {
+// "2026-08-23" → { day: "23", mon: "Aug'26", weekday: "Sunday" } for the
+// MakeMyTrip-style pickup/return summary cards above the calendars.
+const formatTravelDate = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return null;
+  return {
+    day: String(d.getDate()),
+    mon: `${d.toLocaleDateString(undefined, { month: "short" })}'${String(d.getFullYear()).slice(2)}`,
+    weekday: d.toLocaleDateString(undefined, { weekday: "long" }),
+  };
+};
+
+// A single MakeMyTrip-style date card: small caption on top, big day + month,
+// weekday underneath. Shows a muted placeholder until a date is chosen.
+const TravelDateCard = ({ caption, iso, active, onClick }) => {
+  const f = formatTravelDate(iso);
+  return (
+    <div onClick={onClick} role="button" tabIndex={0}
+      style={{ flex: 1, border: `1.5px solid ${active ? C.teal : C.border}`, borderRadius: 12, padding: "12px 16px", background: active ? C.tealFaint : C.surface, minWidth: 0, cursor: "pointer", transition: "border-color 0.12s, background 0.12s", boxShadow: active ? `0 0 0 3px ${C.teal}22` : "none" }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{caption}</div>
+      {f ? (
+        <>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ fontSize: 26, fontWeight: 800, color: C.navy, lineHeight: 1 }}>{f.day}</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: C.navy }}>{f.mon}</span>
+          </div>
+          <div style={{ fontSize: 12, color: C.textSec, marginTop: 3 }}>{f.weekday}</div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 20, fontWeight: 700, color: C.textMuted, lineHeight: 1.3 }}>— —</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 3 }}>Select a date</div>
+        </>
+      )}
+    </div>
+  );
+};
+
+const SingleDateCalendar = ({ car, bookings, label, selectedDate, minDate, onSelect, onClear, rangeStart, rangeEnd }) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const initial = selectedDate ? new Date(selectedDate + "T00:00:00")
@@ -186,17 +219,10 @@ const SingleDateCalendar = ({ car, bookings, label, selectedDate, minDate, onSel
   const statusByDate = {};
   const availableFromByDate = {};  // date -> "HH:MM" the car frees up on a same-day turnover (a prior booking ends today)
   const availableUntilByDate = {}; // date -> "HH:MM" the car is free until (a different booking's pickup starts today)
-  const bookedWindowByDate = {};   // date -> { from, until } — set only when the SAME single booking both starts
-                                    // and ends today (availableUntil < availableFrom, i.e. a real booked window in
-                                    // the middle of the day), as opposed to a turnover between two different
-                                    // bookings (where availableFrom < availableUntil — a free gap, not a booking).
   timeline.forEach(({ date, status, availableFrom, availableUntil }) => {
     statusByDate[date] = status;
     if (availableFrom) availableFromByDate[date] = availableFrom;
     if (availableUntil) availableUntilByDate[date] = availableUntil;
-    if (availableFrom && availableUntil && availableUntil < availableFrom) {
-      bookedWindowByDate[date] = { from: availableUntil, until: availableFrom };
-    }
   });
   // "13:00" → "1:00 PM", for the turnover "available from"/"available until" hints.
   const fmtTime = (hhmm) => {
@@ -205,15 +231,6 @@ const SingleDateCalendar = ({ car, bookings, label, selectedDate, minDate, onSel
     const ap = h >= 12 ? "PM" : "AM";
     h = h % 12 || 12;
     return `${h}:${String(m).padStart(2, "0")} ${ap}`;
-  };
-  // Same as fmtTime but drops ":00" for on-the-hour times ("8 AM" instead of
-  // "8:00 AM") — used for the compact "Booked: 8 AM–12 PM" label.
-  const fmtTimeClean = (hhmm) => {
-    if (!hhmm) return "";
-    let [h, m] = hhmm.split(":").map(Number);
-    const ap = h >= 12 ? "PM" : "AM";
-    h = h % 12 || 12;
-    return m ? `${h}:${String(m).padStart(2, "0")} ${ap}` : `${h} ${ap}`;
   };
 
   const isPast = (d) => d < today;
@@ -288,51 +305,27 @@ const SingleDateCalendar = ({ car, bookings, label, selectedDate, minDate, onSel
   };
 
   return (
-    <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", marginTop: 4, marginBottom: 4, background: C.surface, maxWidth: 250 }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: C.textSec, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</div>
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 16px", marginTop: 4, marginBottom: 4, background: C.surface, boxShadow: "0 2px 10px rgba(15,23,42,0.05)" }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textMuted, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.6 }}>{label}</div>
 
-      {/* Header: month/year + up/down nav */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-        <div style={{ fontSize: 11.5, fontWeight: 700, color: C.navy }}>{monthLabel}</div>
-        <div style={{ display: "flex", gap: 2 }}>
-          <button type="button" disabled={!canGoPrev} onClick={goPrev}
-            style={{ background: "none", border: "none", cursor: canGoPrev ? "pointer" : "default", opacity: canGoPrev ? 1 : 0.3, fontSize: 11, color: C.navy, padding: 2 }}>↑</button>
-          <button type="button" onClick={goNext}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.navy, padding: 2 }}>↓</button>
-        </div>
-      </div>
-
-      {/* Legend */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-        {["Available", "On Rental"].map(s => (
-          <div key={s} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textSec }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: CALENDAR_STATUS_BG[s], border: `1px solid ${CALENDAR_STATUS_TEXT[s]}22`, display: "inline-block" }} />
-            {s}
-          </div>
-        ))}
-        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textSec }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.amber, display: "inline-block" }} />
-          Available after return time
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textSec }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.teal, display: "inline-block" }} />
-          Available until next pickup
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textSec }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.red, display: "inline-block" }} />
-          Booked part of day — rest available
-        </div>
+      {/* Header: month/year + ‹ › chevron nav (MakeMyTrip style) */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <button type="button" disabled={!canGoPrev} onClick={goPrev} aria-label="Previous month"
+          style={{ width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%", background: C.bg, border: `1px solid ${C.border}`, cursor: canGoPrev ? "pointer" : "default", opacity: canGoPrev ? 1 : 0.3, fontSize: 15, lineHeight: 1, color: C.navy, fontWeight: 700 }}>‹</button>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.navy }}>{monthLabel}</div>
+        <button type="button" onClick={goNext} aria-label="Next month"
+          style={{ width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%", background: C.bg, border: `1px solid ${C.border}`, cursor: "pointer", fontSize: 15, lineHeight: 1, color: C.navy, fontWeight: 700 }}>›</button>
       </div>
 
       {/* Weekday header */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 2 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 4 }}>
         {CALENDAR_WEEKDAYS.map((w, i) => (
-          <div key={i} style={{ textAlign: "center", fontSize: 9, fontWeight: 600, color: C.textMuted, padding: "1px 0" }}>{w}</div>
+          <div key={i} style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: C.textMuted, padding: "2px 0" }}>{w}</div>
         ))}
       </div>
 
       {/* Day grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px 0" }}>
         {cells.map((day, i) => {
           if (day === null) return <div key={`b${i}`} />;
           const d = new Date(viewYear, viewMonth, day);
@@ -341,83 +334,102 @@ const SingleDateCalendar = ({ car, bookings, label, selectedDate, minDate, onSel
           const isSelected = iso === selectedDate;
           const isToday = iso === toISODate(today);
           const belowMin = isBeforeMin(d);
+          // Endpoints of the chosen pickup→return range (shown in BOTH calendars
+          // so the range reads consistently); inRange = the nights strictly
+          // between them, shaded as a connected band like MakeMyTrip.
+          const isEndpoint = (rangeStart && iso === rangeStart) || (rangeEnd && iso === rangeEnd);
+          const inRange = rangeStart && rangeEnd && iso > rangeStart && iso < rangeEnd;
+          const isRangeLeft = rangeStart && iso === rangeStart && rangeEnd;
+          const isRangeRight = rangeEnd && iso === rangeEnd && rangeStart;
           // Return calendar (minDate set): any day from minDate onward is
           // clickable — handleDayClick validates the whole range. Pickup
           // calendar (no minDate): Available days, plus past days (backdated
           // bookings) whose real overlap is caught by the conflict check.
           const clickable = minDate ? !belowMin : (isAvailableDay(d) || isPast(d));
-          const dimmed = !clickable && !isSelected;
+          const dimmed = !clickable && !isSelected && !isEndpoint;
           const af = availableFromByDate[iso];  // turnover: car returns from a prior booking this day, free after
           const au = availableUntilByDate[iso]; // turnover: a different booking picks up this day, free until then
-          const booked = bookedWindowByDate[iso]; // a single booking occupies just this window today — rest of day is free
           const titleParts = [];
-          if (booked) {
-            titleParts.push(`Booked ${fmtTimeClean(booked.from)}–${fmtTimeClean(booked.until)} — rest of day available`);
-          } else {
-            if (af) titleParts.push(`Available from ${fmtTime(af)} — car returns this day`);
-            if (au) titleParts.push(`Available until ${fmtTime(au)} — next pickup this day`);
-          }
+          if (af) titleParts.push(`Available from ${fmtTime(af)} — car returns this day`);
+          if (au) titleParts.push(`Available until ${fmtTime(au)} — next pickup this day`);
+          // Pill fill: endpoints solid teal; nights in between get a pale band.
+          const cellBg = isEndpoint ? C.teal : inRange ? C.tealFaint : status !== "Past" ? CALENDAR_STATUS_BG[status] : "transparent";
+          const cellColor = isEndpoint ? "#fff" : status === "Past" ? C.textMuted : CALENDAR_STATUS_TEXT[status];
+          // Connect the band to the endpoints by squaring the inner corners.
+          const radius = inRange ? 0
+            : isRangeLeft ? "18px 0 0 18px"
+            : isRangeRight ? "0 18px 18px 0"
+            : isEndpoint ? 18 : 9;
           return (
-            <button
-              type="button"
-              key={iso}
-              disabled={!clickable && !isSelected}
-              onClick={() => handleDayClick(day)}
-              title={titleParts.length ? titleParts.join(" · ") : status}
-              style={{
-                position: "relative",
-                padding: "4px 0", fontSize: 10.5, borderRadius: 4,
-                border: isSelected ? `2px solid ${C.navy}` : isToday ? `1px solid ${C.navy}` : "1px solid transparent",
-                fontFamily: "inherit", cursor: clickable ? "pointer" : "default", boxSizing: "border-box",
-                background: status !== "Past" ? CALENDAR_STATUS_BG[status] : "transparent",
-                color: status === "Past" ? C.textMuted : CALENDAR_STATUS_TEXT[status],
-                fontWeight: isSelected ? 700 : 500,
-                opacity: dimmed ? 0.4 : 1,
-              }}
-            >
-              {day}
-              {booked ? (
-                <span style={{ position: "absolute", top: 1, right: 1, width: 5, height: 5, borderRadius: "50%", background: C.red }} />
-              ) : (
-                <>
-                  {af && <span style={{ position: "absolute", top: 1, right: 1, width: 5, height: 5, borderRadius: "50%", background: C.amber }} />}
-                  {au && <span style={{ position: "absolute", bottom: 1, right: 1, width: 5, height: 5, borderRadius: "50%", background: C.teal }} />}
-                </>
-              )}
-            </button>
+            <div key={iso} style={{ background: inRange || isRangeLeft || isRangeRight ? C.tealFaint : "transparent", padding: "2px 0", display: "flex", justifyContent: "center" }}>
+              <button
+                type="button"
+                disabled={!clickable && !isSelected && !isEndpoint}
+                onClick={() => handleDayClick(day)}
+                title={titleParts.length ? titleParts.join(" · ") : status}
+                style={{
+                  position: "relative",
+                  width: "100%", height: 34, fontSize: 12.5, borderRadius: radius,
+                  border: isToday && !isEndpoint ? `1.5px solid ${C.teal}` : "1.5px solid transparent",
+                  fontFamily: "inherit", cursor: clickable ? "pointer" : "default", boxSizing: "border-box",
+                  background: cellBg,
+                  color: cellColor,
+                  fontWeight: isEndpoint ? 700 : 500,
+                  opacity: dimmed ? 0.35 : 1,
+                  boxShadow: isEndpoint ? "0 2px 6px rgba(41,106,99,0.35)" : "none",
+                  transition: "background 0.12s",
+                }}
+              >
+                {day}
+                {af && !isEndpoint && <span style={{ position: "absolute", top: 3, right: 3, width: 5, height: 5, borderRadius: "50%", background: C.amber }} />}
+                {au && !isEndpoint && <span style={{ position: "absolute", bottom: 3, right: 3, width: 5, height: 5, borderRadius: "50%", background: C.teal }} />}
+              </button>
+            </div>
           );
         })}
       </div>
 
-      {dayError && <div style={{ fontSize: 10, color: C.red, marginTop: 6 }}>{dayError}</div>}
+      {/* Legend — kept for the availability meaning, condensed */}
+      <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+        {["Available", "On Rental"].map(s => (
+          <div key={s} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textSec }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: CALENDAR_STATUS_BG[s], border: `1px solid ${CALENDAR_STATUS_TEXT[s]}22`, display: "inline-block" }} />
+            {s}
+          </div>
+        ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textSec }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.amber, display: "inline-block" }} />
+          Free after return time
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textSec }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.teal, display: "inline-block" }} />
+          Free until next pickup
+        </div>
+      </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
-        <div style={{ fontSize: 10, color: C.textMuted }}>
+      {dayError && <div style={{ fontSize: 10.5, color: C.red, marginTop: 8 }}>{dayError}</div>}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+        <div style={{ fontSize: 10.5, color: C.textMuted }}>
           {selectedDate ? (
             <>
-              Selected: <strong style={{ color: C.navy }}>{selectedDate}</strong>
-              {bookedWindowByDate[selectedDate] ? (
-                <span style={{ color: C.red, fontWeight: 700 }}>
-                  {" "}· Booked: {fmtTimeClean(bookedWindowByDate[selectedDate].from)}–{fmtTimeClean(bookedWindowByDate[selectedDate].until)} (rest of day available)
-                </span>
-              ) : (
-                <>
-                  {availableFromByDate[selectedDate] && (
-                    <span style={{ color: C.amber, fontWeight: 700 }}> · available from {fmtTime(availableFromByDate[selectedDate])}</span>
-                  )}
-                  {availableUntilByDate[selectedDate] && (
-                    <span style={{ color: C.teal, fontWeight: 700 }}> · available until {fmtTime(availableUntilByDate[selectedDate])}</span>
-                  )}
-                </>
+              {availableFromByDate[selectedDate] && (
+                <span style={{ color: C.amber, fontWeight: 700 }}>Available from {fmtTime(availableFromByDate[selectedDate])}</span>
+              )}
+              {availableUntilByDate[selectedDate] && (
+                <span style={{ color: C.teal, fontWeight: 700 }}>{availableFromByDate[selectedDate] ? " · " : ""}Available until {fmtTime(availableUntilByDate[selectedDate])}</span>
+              )}
+              {!availableFromByDate[selectedDate] && !availableUntilByDate[selectedDate] && (
+                <span>Selected: <strong style={{ color: C.navy }}>{selectedDate}</strong></span>
               )}
             </>
           ) : "No date selected"}
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 12 }}>
           <button type="button" onClick={() => { onClear(); setDayError(""); }}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10.5, fontWeight: 600, color: C.teal, padding: 0 }}>Clear</button>
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.teal, padding: 0 }}>Clear</button>
           <button type="button" onClick={goToday}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10.5, fontWeight: 600, color: C.teal, padding: 0 }}>Today</button>
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.teal, padding: 0 }}>Today</button>
         </div>
       </div>
     </div>
@@ -584,10 +596,6 @@ export default function FleetOpzApp() {
   // can validate every step in one pass and jump straight to the first step
   // that still has a problem.
   const [fieldErrors, setFieldErrors] = useState({});
-  // Lets handleBookingStep4Next pull focus to this field the instant
-  // validation fails on Next — so the red-border error is impossible to
-  // miss even if the field was never clicked/touched beforehand.
-  const depositPaidRef = useRef(null);
   const clearFieldError = (key) => {
     setFieldErrors(prev => {
       if (!(key in prev)) return prev;
@@ -602,6 +610,20 @@ export default function FleetOpzApp() {
   // reorganized fields). Reset to 1 whenever the modal is opened or closed
   // so it never reopens mid-wizard.
   const [bookingStep, setBookingStep] = useState(1);
+  // Which Rental Period calendar popover is open ("pickup" | "return" | null).
+  // The calendars are shown as dropdowns under the summary cards so the wizard
+  // doesn't need to scroll; opened by clicking a card, closed on select/outside.
+  const [openCalendar, setOpenCalendar] = useState(null);
+  // Close the open date popover when clicking anywhere outside the cards/popover.
+  const calendarWrapRef = useRef(null);
+  useEffect(() => {
+    if (!openCalendar) return;
+    const onDown = (e) => {
+      if (calendarWrapRef.current && !calendarWrapRef.current.contains(e.target)) setOpenCalendar(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [openCalendar]);
   const BOOKING_STEP_COUNT = 5;
   const BOOKING_STEP_LABELS = ["Customer Details", "Booking Details", "Pricing & Charges", "Payment", "Review & Confirm"];
 
@@ -630,7 +652,9 @@ export default function FleetOpzApp() {
   // otherwise fall back to Singapore with the raw digits as typed.
   const splitLegacyContact = (raw) => {
     const digits = (raw || "").replace(/\D/g, "");
-    if (digits.length === 8 && digits.startsWith("65")) {
+    // Strip a leading "65" country code when what's left is a full 8-digit
+    // Singapore number (stored as "65XXXXXXXX" = 10 digits).
+    if (digits.length === 10 && digits.startsWith("65")) {
       return { contactCountryCode: "+65", contact: digits.slice(2) };
     }
     return { contactCountryCode: "+65", contact: digits };
@@ -639,7 +663,11 @@ export default function FleetOpzApp() {
   const handleICInputChange = (e) => {
     let v = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (v.length > 15) v = v.slice(0, 15);
-    setNewBookingData(prev => ({ ...prev, ic: v }));
+    // IC Number and Driving License Number are the same value, so mirror the IC
+    // straight into the license field as it's typed. The license field stays
+    // editable in case a record ever needs to differ, but by default they match.
+    clearFieldError("license");
+    setNewBookingData(prev => ({ ...prev, ic: v, license: v }));
   };
 
   // IC Number → check booking history for an existing customer once the
@@ -669,7 +697,9 @@ export default function FleetOpzApp() {
           customer: prev.customer || cust?.name || bookingMatch?.customer || "",
           ...splitLegacyContact(cust?.contact ?? bookingMatch?.contact ?? ""),
           passport: bookingMatch?.passport ?? prev.passport ?? "",
-          license: cust?.license ?? bookingMatch?.license ?? "",
+          // Fall back to the IC when the matched record has no stored license —
+          // they're the same number (see handleICInputChange).
+          license: cust?.license ?? bookingMatch?.license ?? prev.ic ?? "",
           licenseExpiry: bookingMatch?.licenseExpiry ?? prev.licenseExpiry ?? "",
           address: cust?.address ?? bookingMatch?.address ?? "",
           customerType: cust?.customerType ?? prev.customerType,
@@ -678,7 +708,9 @@ export default function FleetOpzApp() {
         };
       }
       if (matchedCustomer) {
-        return { ...prev, contact: "", contactCountryCode: "+65", passport: "", license: "", licenseExpiry: "", address: "", customerType: "Local", age: "", drivingExperience: "" };
+        // Clearing a stale match, but keep license mirrored to the current IC
+        // (they're the same number) rather than blanking it.
+        return { ...prev, contact: "", contactCountryCode: "+65", passport: "", license: prev.ic || "", licenseExpiry: "", address: "", customerType: "Local", age: "", drivingExperience: "" };
       }
       return prev;
     });
@@ -699,19 +731,6 @@ export default function FleetOpzApp() {
   const validateStep1 = () => {
     const errors = {};
     if (!newBookingData.customer.trim()) errors.customer = "Customer Name is required";
-    // A customer name must map to a single IC — block reusing the same name
-    // with a different IC number. Matched case-insensitively and trimmed.
-    else {
-      const nameKey = newBookingData.customer.trim().toLowerCase();
-      const normIcLocal = (v) => (v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-      const currentIc = normIcLocal(newBookingData.ic);
-      const clash = (fleetData.customers || []).find(
-        c => (c.name || "").trim().toLowerCase() === nameKey && normIcLocal(c.ic) !== currentIc
-      );
-      if (clash) {
-        errors.customer = `A customer named "${newBookingData.customer.trim()}" already exists with IC ${clash.ic}. Use the same IC, or a different name.`;
-      }
-    }
     if (!isValidEmiratesIdOrPassport(newBookingData.ic)) {
       errors.ic = "Enter a valid Emirates ID (15 digits, e.g. 784-1990-1234567-1) or a passport number (6-9 characters)";
     }
@@ -723,27 +742,16 @@ export default function FleetOpzApp() {
     }
     if (!newBookingData.license.trim()) {
       errors.license = "Driving License Number is required";
-    } else if (!isValidDrivingLicenseFormat(newBookingData.license)) {
-      errors.license = DRIVING_LICENSE_FORMAT_ERROR;
+    } else if (!isValidEmiratesIdOrPassport(newBookingData.license)) {
+      // Driving License Number is the same value as the IC, so it's valid
+      // whenever the IC is (Emirates ID / passport format) — not the stricter
+      // Singapore driving-licence pattern, which would reject valid IC numbers.
+      errors.license = "Enter a valid Driving License Number (same as the IC Number)";
     } else {
       const restrictedMatch = restrictedLicenses.find(
         r => normalizeLicense(r.licenseNumber) === normalizeLicense(newBookingData.license)
       );
       if (restrictedMatch) errors.license = "This driving license has an active criminal case. Booking cannot be created.";
-    }
-    const invalidDriver = newBookingData.additionalDrivers.find(
-      d => d.license.trim() && !isValidDrivingLicenseFormat(d.license)
-    );
-    if (invalidDriver) {
-      const idx = newBookingData.additionalDrivers.indexOf(invalidDriver);
-      errors.driverLicense = `Driver ${idx + 1}: ${DRIVING_LICENSE_FORMAT_ERROR}`;
-    }
-    const invalidDriverContact = newBookingData.additionalDrivers.find(
-      d => d.contact.trim() && !isValidContactNumber(d.contact)
-    );
-    if (invalidDriverContact) {
-      const idx = newBookingData.additionalDrivers.indexOf(invalidDriverContact);
-      errors.driverContact = `Driver ${idx + 1}: ${CONTACT_ERROR_MSG}`;
     }
     return errors;
   };
@@ -755,16 +763,6 @@ export default function FleetOpzApp() {
       errors.dates = "Pickup Date and Return Date are required";
     } else if (new Date(newBookingData.end) <= new Date(newBookingData.start)) {
       errors.returnTime = "Return Date & Time must be after the Pickup Date & Time";
-    }
-    // Pickup Time can't be earlier than the current time of day — compared
-    // on time-of-day alone (HH:MM), regardless of which Pickup Date is
-    // selected, per spec. Only enforced when creating a new booking —
-    // editing an existing (possibly backdated) booking is unaffected.
-    if (!editingBookingId && newBookingData.pickupTime) {
-      const nowHHMM = new Date().toTimeString().slice(0, 5);
-      if (newBookingData.pickupTime < nowHHMM) {
-        errors.pickupTime = `Pickup Time cannot be earlier than the current time (${to12hLabel(nowHHMM)}).`;
-      }
     }
     if (!newBookingData.pickup.trim()) errors.pickup = "Pickup Location is required";
     if (!newBookingData.drop.trim()) errors.drop = "Drop Location is required";
@@ -780,19 +778,16 @@ export default function FleetOpzApp() {
     return errors;
   };
 
-  // Step 3's only failure mode (Security Deposit > Rate Charge) can't
-  // actually happen through the UI — the input clamps itself live — so this
-  // is a defensive safety net for edge cases like the Rate or dates changing
-  // after the deposit was set. Kept inline (not an alert) so it's consistent
-  // with everything else, and so it's still visible if it ever does fire.
   const validateStep3 = () => {
     const errors = {};
-    // Security Deposit is mandatory — staff must enter an amount (0 counts as
-    // a deliberate "no deposit" choice; blank does not) before moving on.
+    // Security Deposit is mandatory and must be greater than zero — every
+    // booking has to collect a refundable deposit. It may be any amount,
+    // including more than the Rate Charge (a high-value car can warrant a
+    // deposit larger than the rental itself).
     if (!editingBookingId && newBookingData.deductible === "") {
-      errors.deductible = "Security Deposit is required. Enter an amount (0 if no deposit is being collected).";
-    } else if (!editingBookingId && Number(newBookingData.deductible) > bookingRateCharge) {
-      errors.deductible = `Security Deposit (${formatSGD(Number(newBookingData.deductible))}) cannot exceed the Rate Charge (${formatSGD(bookingRateCharge)}). Please lower the Security Deposit.`;
+      errors.deductible = "Security Deposit is required. Enter an amount greater than 0.";
+    } else if (!editingBookingId && Number(newBookingData.deductible) <= 0) {
+      errors.deductible = "Security Deposit must be greater than 0.";
     }
     // Additional Driver Charge becomes mandatory the moment at least one
     // Additional Driver has been added on Step 1 — a driver was added but
@@ -823,13 +818,6 @@ export default function FleetOpzApp() {
     if (newBookingData.depositCollected && depositAmount > 0
       && (!newBookingData.depositCollectedDate || !newBookingData.depositCollectedTime)) {
       errors.depositDateTime = "Enter the Deposit Date & Time (or untick \u201CSecurity deposit received\u201D).";
-    }
-    // Amount Collected Now must be entered and must equal the full deposit —
-    // partial deposits aren't allowed. Blank or anything less than the full
-    // amount is an error (the input is already capped so it can't exceed it).
-    if (newBookingData.depositCollected && depositAmount > 0
-      && (String(newBookingData.depositPaid).trim() === "" || Number(newBookingData.depositPaid) < depositAmount)) {
-      errors.depositPaid = `Enter the full deposit amount (${formatSGD(depositAmount)}). Partial deposits aren't allowed.`;
     }
     return errors;
   };
@@ -883,7 +871,7 @@ export default function FleetOpzApp() {
   // Step 2 → Step 3.
   const handleBookingStep2Next = () => {
     const errors = validateStep2();
-    setFieldErrors(prev => ({ ...prev, plate: undefined, dates: undefined, returnTime: undefined, pickupTime: undefined, pickup: undefined, drop: undefined, rate: undefined, conflict: undefined, ...errors }));
+    setFieldErrors(prev => ({ ...prev, plate: undefined, dates: undefined, returnTime: undefined, pickup: undefined, drop: undefined, rate: undefined, conflict: undefined, ...errors }));
     if (Object.keys(errors).length) return;
     setBookingStep(3);
   };
@@ -899,16 +887,8 @@ export default function FleetOpzApp() {
   // Step 4 → Step 5.
   const handleBookingStep4Next = () => {
     const errors = validateStep4();
-    setFieldErrors(prev => ({ ...prev, amountCollected: undefined, amountCollectedDateTime: undefined, depositDateTime: undefined, depositCollected: undefined, depositPaid: undefined, ...errors }));
-    if (Object.keys(errors).length) {
-      // Bring the first problem field on screen and focus it so the error
-      // is obvious immediately, not only once the user happens to click in.
-      if (errors.depositPaid) {
-        depositPaidRef.current?.focus();
-        depositPaidRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-      return;
-    }
+    setFieldErrors(prev => ({ ...prev, amountCollected: undefined, amountCollectedDateTime: undefined, depositDateTime: undefined, depositCollected: undefined, ...errors }));
+    if (Object.keys(errors).length) return;
     setBookingStep(5);
   };
 
@@ -1298,8 +1278,8 @@ export default function FleetOpzApp() {
   const DRIVING_LICENSE_FORMAT_ERROR = "Enter a valid Driving License Number ";
 
   // Booking contact number: exactly 8 digits, starting with "65".
-  const isValidContactNumber = (v) => /^65\d{6}$/.test(v);
-  const CONTACT_ERROR_MSG = "Contact number must be 8 digits and start with 65";
+  const isValidContactNumber = (v) => /^65\d{8}$/.test(v);
+  const CONTACT_ERROR_MSG = "Contact number must be the 65 country code followed by 8 digits (e.g. 6598765432)";
 
   // Booking/Return now capture date + time (datetime-local, e.g.
   // "2026-07-21T14:30"), so format them for anything shown back to the user.
@@ -1391,17 +1371,19 @@ export default function FleetOpzApp() {
     // — the same separation computeBookingInvoice already enforces.
     const depositAmount = Number(newBookingData.deductible) || 0;
     let depositCollectedAt;
-    // Partial deposits aren't allowed — validateStep4 already guarantees
-    // depositPaid equals the full deposit amount whenever depositCollected is
-    // true. Clamped here defensively in case this is ever reached bypassing
-    // that check.
+    // How much of the deposit was actually taken now: blank field → the full
+    // deposit; a number → that amount (clamped to the deposit). 0 / not collected
+    // → nothing held yet. Persisted as depositPaid so the Grand Total math and
+    // the return/refund cap both use what was really received (partial allowed).
     let depositPaid = 0;
     if (newBookingData.depositCollected && depositAmount > 0) {
       if (!newBookingData.depositCollectedDate || !newBookingData.depositCollectedTime) {
         alert("Enter the Deposit Date & Time (or untick “Security deposit received”).");
         return;
       }
-      depositPaid = Math.max(0, Math.min(Number(newBookingData.depositPaid) || 0, depositAmount));
+      depositPaid = String(newBookingData.depositPaid).trim() === ""
+        ? depositAmount
+        : Math.max(0, Math.min(Number(newBookingData.depositPaid) || 0, depositAmount));
       depositCollectedAt = `${newBookingData.depositCollectedDate}T${newBookingData.depositCollectedTime}`;
     }
     // Built explicitly here, once, as the booking's first Payment History
@@ -1437,7 +1419,7 @@ export default function FleetOpzApp() {
     const createHistory = [auditEntry("created", `${newBookingData.plate} · ${newBookingData.customer || "—"}`)];
     if (depositCollectedAt) {
       createHistory.push({
-        ...auditEntry("deposit_collected", `Deposit ${formatSGD(depositPaid)} · ${newBookingData.depositCollectedMethod}${newBookingData.depositReference ? ` · ${newBookingData.depositReference}` : ""}`),
+        ...auditEntry("deposit_collected", `Deposit ${formatSGD(depositPaid)}${depositPaid < depositAmount ? ` of ${formatSGD(depositAmount)} (partial)` : ""} · ${newBookingData.depositCollectedMethod}${newBookingData.depositReference ? ` · ${newBookingData.depositReference}` : ""}`),
         at: depositCollectedAt,
       });
     }
@@ -1500,10 +1482,10 @@ export default function FleetOpzApp() {
 
   // Vehicle Handover — now lives inside Step 5 (Review) of the Edit Booking
   // flow itself, rather than a separate modal. Validates Starting Mileage /
-  // Fuel Level, requires the full rental amount to already be collected,
-  // flips the booking to Active, and generates the Rental Agreement
-  // immediately (no extra click needed) — same fields/behavior the old
-  // standalone handover modal used, just triggered from here instead.
+  // Fuel Level, flips the booking to Active, and generates the Rental
+  // Agreement immediately (no extra click needed) — same fields/behavior the
+  // old standalone handover modal used, just triggered from here instead.
+  // Completed/Closed status derivation and payment logic are untouched.
   const handleCompleteHandover = () => {
     if (!editingBookingId) return;
     const errors = validateHandoverFields();
@@ -1511,14 +1493,6 @@ export default function FleetOpzApp() {
     if (Object.keys(errors).length) return;
     const original = fleetData.bookings.find(b => b.id === editingBookingId);
     const car = fleetData.fleet.find(c => c.plate === newBookingData.plate);
-    // The Agreement can't be generated against an unpaid balance — send
-    // staff to collect the rest first (Pricing & Payment tab / Collect Full
-    // Balance Now) rather than generating it here.
-    const { balanceDue } = computeBookingInvoice(original);
-    if (balanceDue > 0) {
-      alert(`Collect the full rental amount before generating the Agreement. Balance due: ${formatSGD(balanceDue)}.`);
-      return;
-    }
     const updates = {
       status: "Active",
       startingMileage: newBookingData.startingMileage,
@@ -1727,10 +1701,7 @@ export default function FleetOpzApp() {
             @keyframes bookingWizardFade { from { opacity: 0; } to { opacity: 1; } }
             @keyframes bookingWizardPop { from { opacity: 0; transform: translate(-50%, -50%) scale(0.97); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
           `}</style>
-          {/* Backdrop is purely visual — clicking outside the form must never
-              close it (and never discard entered data). Only Cancel, the ✕
-              button, or a successful submit call closeNewBookingModal. */}
-          <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.35)", zIndex: 200, animation: "bookingWizardFade 0.15s ease" }} />
+          <div onClick={closeNewBookingModal} style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.35)", zIndex: 200, animation: "bookingWizardFade 0.15s ease" }} />
           <div style={{
             position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
             width: "94vw", maxWidth: 820, height: "90vh", maxHeight: 880,
@@ -1889,14 +1860,14 @@ export default function FleetOpzApp() {
                         type="text"
                         value={newBookingData.license}
                         onChange={(e) => { clearFieldError("license"); setNewBookingData({ ...newBookingData, license: e.target.value.toUpperCase() }); }}
-                        placeholder="S1234567A"
-                        style={bookingFieldInputStyle(false, !!(newBookingData.license.trim() && !isValidDrivingLicenseFormat(newBookingData.license)) || (!newBookingData.license.trim() && !!fieldErrors.license))}
+                        placeholder="Same as IC Number"
+                        style={bookingFieldInputStyle(false, !!(newBookingData.license.trim() && !isValidEmiratesIdOrPassport(newBookingData.license)) || (!newBookingData.license.trim() && !!fieldErrors.license))}
                       />
                       {!newBookingData.license.trim() && fieldErrors.license ? (
                         <FieldErr msg={fieldErrors.license} />
-                      ) : newBookingData.license.trim() && !isValidDrivingLicenseFormat(newBookingData.license) ? (
+                      ) : newBookingData.license.trim() && !isValidEmiratesIdOrPassport(newBookingData.license) ? (
                         <div style={{ fontSize: 10.5, color: C.red, marginTop: 5, fontWeight: 600 }}>
-                          {DRIVING_LICENSE_FORMAT_ERROR}
+                          Enter a valid Driving License Number (same as the IC Number)
                         </div>
                       ) : newBookingData.license && restrictedLicenses.some(
                         r => r.licenseNumber.trim().toUpperCase() === newBookingData.license.trim().toUpperCase()
@@ -2013,55 +1984,95 @@ export default function FleetOpzApp() {
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.navy, margin: "18px 0 14px" }}>📅 Rental Period</div>
 
                   {newBookingData.plate ? (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                      <SingleDateCalendar
-                        label="Pickup Date"
-                        car={fleetData.fleet.find(c => c.plate === newBookingData.plate)}
-                        bookings={calendarBookings}
-                        selectedDate={newBookingData.pickupDate}
-                        onSelect={(iso, availableFrom) => {
-                          setNewBookingData(prev => {
-                            // If the existing return date is now before the new
-                            // pickup date, clear it — it's no longer valid.
-                            const returnDate = prev.returnDate && prev.returnDate < iso ? "" : prev.returnDate;
-                            // On a turnover pickup day the car only frees up at
-                            // availableFrom (e.g. 10:00) — default the pickup time
-                            // to that so the booking doesn't overlap the returning
-                            // rental. Leave a time the user already set that's at
-                            // or after the return time untouched.
-                            let pickupTime = prev.pickupTime;
-                            if (availableFrom && (!pickupTime || pickupTime < availableFrom)) pickupTime = availableFrom;
-                            return {
-                              ...prev,
-                              pickupDate: iso,
-                              returnDate,
-                              pickupTime,
-                              start: combineDateTime(iso, pickupTime),
-                              end: combineDateTime(returnDate, prev.returnTime),
-                            };
-                          });
-                        }}
-                        onClear={() => {
-                          setNewBookingData(prev => ({ ...prev, pickupDate: "", returnDate: "", start: "", end: "" }));
-                        }}
-                      />
-                      <SingleDateCalendar
-                        label="Return Date"
-                        car={fleetData.fleet.find(c => c.plate === newBookingData.plate)}
-                        bookings={calendarBookings}
-                        selectedDate={newBookingData.returnDate}
-                        minDate={newBookingData.pickupDate}
-                        onSelect={(iso) => {
-                          setNewBookingData(prev => ({
-                            ...prev,
-                            returnDate: iso,
-                            end: combineDateTime(iso, prev.returnTime),
-                          }));
-                        }}
-                        onClear={() => {
-                          setNewBookingData(prev => ({ ...prev, returnDate: "", end: "" }));
-                        }}
-                      />
+                    <div ref={calendarWrapRef} style={{ position: "relative" }}>
+                    {/* MakeMyTrip-style summary cards: click a card to open its
+                        calendar as a dropdown (no scrolling); nights chip between. */}
+                    <div style={{ display: "flex", alignItems: "stretch", gap: 10 }}>
+                      <TravelDateCard caption="Pickup" iso={newBookingData.pickupDate}
+                        active={openCalendar === "pickup"}
+                        onClick={() => setOpenCalendar(openCalendar === "pickup" ? null : "pickup")} />
+                      {(() => {
+                        const p = newBookingData.pickupDate, r = newBookingData.returnDate;
+                        const nights = p && r ? Math.max(0, Math.round((new Date(r + "T00:00:00") - new Date(p + "T00:00:00")) / 86400000)) : null;
+                        return (
+                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "0 4px", minWidth: 56 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: nights != null ? C.teal : C.textMuted, background: nights != null ? C.tealFaint : "transparent", borderRadius: 20, padding: "3px 10px", whiteSpace: "nowrap" }}>
+                              {nights != null ? `${nights} night${nights === 1 ? "" : "s"}` : "→"}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                      <TravelDateCard caption="Return" iso={newBookingData.returnDate}
+                        active={openCalendar === "return"}
+                        onClick={() => setOpenCalendar(openCalendar === "return" ? null : "return")} />
+                    </div>
+
+                    {/* Calendar popover — only the clicked card's calendar shows,
+                        as a dropdown that closes on select or outside click. */}
+                    {openCalendar && (
+                      <div style={{ position: "absolute", top: "100%", marginTop: 8, zIndex: 50, width: "min(360px, 100%)", ...(openCalendar === "return" ? { right: 0 } : { left: 0 }) }}>
+                        {openCalendar === "pickup" ? (
+                          <SingleDateCalendar
+                            label="Pickup Date"
+                            car={fleetData.fleet.find(c => c.plate === newBookingData.plate)}
+                            bookings={calendarBookings}
+                            selectedDate={newBookingData.pickupDate}
+                            rangeStart={newBookingData.pickupDate}
+                            rangeEnd={newBookingData.returnDate}
+                            onSelect={(iso, availableFrom) => {
+                              setNewBookingData(prev => {
+                                // If the existing return date is now before the new
+                                // pickup date, clear it — it's no longer valid.
+                                const returnDate = prev.returnDate && prev.returnDate < iso ? "" : prev.returnDate;
+                                // On a turnover pickup day the car only frees up at
+                                // availableFrom (e.g. 10:00) — default the pickup time
+                                // to that so the booking doesn't overlap the returning
+                                // rental. Leave a time the user already set that's at
+                                // or after the return time untouched.
+                                let pickupTime = prev.pickupTime;
+                                if (availableFrom && (!pickupTime || pickupTime < availableFrom)) pickupTime = availableFrom;
+                                return {
+                                  ...prev,
+                                  pickupDate: iso,
+                                  returnDate,
+                                  pickupTime,
+                                  start: combineDateTime(iso, pickupTime),
+                                  end: combineDateTime(returnDate, prev.returnTime),
+                                };
+                              });
+                              // If a valid return date remains, close; otherwise jump
+                              // straight to the return calendar (MakeMyTrip flow).
+                              const keepsReturn = newBookingData.returnDate && !(newBookingData.returnDate < iso);
+                              setOpenCalendar(keepsReturn ? null : "return");
+                            }}
+                            onClear={() => {
+                              setNewBookingData(prev => ({ ...prev, pickupDate: "", returnDate: "", start: "", end: "" }));
+                            }}
+                          />
+                        ) : (
+                          <SingleDateCalendar
+                            label="Return Date"
+                            car={fleetData.fleet.find(c => c.plate === newBookingData.plate)}
+                            bookings={calendarBookings}
+                            selectedDate={newBookingData.returnDate}
+                            minDate={newBookingData.pickupDate}
+                            rangeStart={newBookingData.pickupDate}
+                            rangeEnd={newBookingData.returnDate}
+                            onSelect={(iso) => {
+                              setNewBookingData(prev => ({
+                                ...prev,
+                                returnDate: iso,
+                                end: combineDateTime(iso, prev.returnTime),
+                              }));
+                              setOpenCalendar(null);
+                            }}
+                            onClear={() => {
+                              setNewBookingData(prev => ({ ...prev, returnDate: "", end: "" }));
+                            }}
+                          />
+                        )}
+                      </div>
+                    )}
                     </div>
                   ) : (
                     <div style={{ fontSize: 12, color: C.textMuted, padding: "10px 0" }}>Select a car above to see its availability and pick rental dates.</div>
@@ -2091,12 +2102,10 @@ export default function FleetOpzApp() {
                       <TimeInput12h
                         value={newBookingData.pickupTime}
                         onChange={(pickupTime) => {
-                          clearFieldError("pickupTime");
                           setNewBookingData(prev => ({ ...prev, pickupTime, start: combineDateTime(prev.pickupDate, pickupTime) }));
                         }}
-                        style={bookingFieldInputStyle(false, !!fieldErrors.pickupTime)}
+                        style={bookingFieldInputStyle(false)}
                       />
-                      <FieldErr msg={fieldErrors.pickupTime} />
                     </div>
                     <div>
                       <label style={bookingFieldLabelStyle}>Return Time</label>
@@ -2208,13 +2217,8 @@ export default function FleetOpzApp() {
                                 additionalDrivers: newBookingData.additionalDrivers.map(d => d.id === driver.id ? { ...d, license: e.target.value.toUpperCase() } : d),
                               })}
                               placeholder="S1234567A"
-                              style={bookingFieldInputStyle(false, !!(driver.license.trim() && !isValidDrivingLicenseFormat(driver.license)))}
+                              style={bookingFieldInputStyle(false)}
                             />
-                            {driver.license.trim() && !isValidDrivingLicenseFormat(driver.license) && (
-                              <div style={{ fontSize: 10.5, color: C.red, marginTop: 5, fontWeight: 600 }}>
-                                {DRIVING_LICENSE_FORMAT_ERROR}
-                              </div>
-                            )}
                           </div>
                           <div>
                             <label style={bookingFieldLabelStyle}>License Expiry Date</label>
@@ -2245,14 +2249,9 @@ export default function FleetOpzApp() {
                                 ...newBookingData,
                                 additionalDrivers: newBookingData.additionalDrivers.map(d => d.id === driver.id ? { ...d, contact: e.target.value } : d),
                               })}
-                              placeholder=" 65012345"
-                              style={bookingFieldInputStyle(false, !!(driver.contact.trim() && !isValidContactNumber(driver.contact)))}
+                              placeholder=" 6598765432"
+                              style={bookingFieldInputStyle(false)}
                             />
-                            {driver.contact.trim() && !isValidContactNumber(driver.contact) && (
-                              <div style={{ fontSize: 10.5, color: C.red, marginTop: 5, fontWeight: 600 }}>
-                                {CONTACT_ERROR_MSG}
-                              </div>
-                            )}
                           </div>
                         </div>
                       </div>
@@ -2387,27 +2386,22 @@ export default function FleetOpzApp() {
                                             // regardless of how Rate Charge moves (e.g. on extension).
                                             <input type="text" readOnly value={formatSGD(Number(newBookingData.deductible) || 0)} style={bookingFieldInputStyle(true)} />
                                           ) : (
-                                            <input type="number" min="0" max={bookingRateCharge || undefined} value={newBookingData.deductible}
+                                            <input type="number" min="1" value={newBookingData.deductible}
                                               onChange={(e) => {
                                                 const v = e.target.value;
                                                 if (v === "") { clearFieldError("deductible"); setNewBookingData({ ...newBookingData, deductible: v }); return; }
                                                 const n = Number(v);
                                                 if (n < 0) return;
-                                                // Security Deposit can never exceed the Rate Charge (Daily Rate x days) —
-                                                // clamp instead of alerting so staff simply can't type past the cap.
-                                                const capped = bookingRateCharge > 0 ? Math.min(n, bookingRateCharge) : n;
+                                                // Security Deposit is not capped by the Rate Charge — it can be any
+                                                // positive amount, including more than the total rental.
                                                 clearFieldError("deductible");
-                                                setNewBookingData({ ...newBookingData, deductible: String(capped) });
+                                                setNewBookingData({ ...newBookingData, deductible: String(n) });
                                               }}
-                                              placeholder="0" style={bookingFieldInputStyle(false, !!fieldErrors.deductible)} />
+                                              placeholder="e.g. 200" style={bookingFieldInputStyle(false, !!fieldErrors.deductible)} />
                                           )}
-                                          {editingBookingId ? (
+                                          {editingBookingId && (
                                             <div style={{ fontSize: 10, color: C.textMuted, marginTop: 3 }}>
                                               Locked — set at booking creation
-                                            </div>
-                                          ) : bookingRateCharge > 0 && (
-                                            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 3 }}>
-                                              Max allowed: {formatSGD(bookingRateCharge)} (Rate Charge)
                                             </div>
                                           )}
                                           <FieldErr msg={fieldErrors.deductible} />
@@ -2508,9 +2502,8 @@ export default function FleetOpzApp() {
                       {newBookingData.depositCollected ? (
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
                           <div style={{ gridColumn: "1 / -1" }}>
-                            <label style={bookingFieldLabelStyle}>Amount Collected Now <span style={{ color: C.red }}>*</span></label>
+                            <label style={bookingFieldLabelStyle}>Amount Collected Now</label>
                             <input
-                              ref={depositPaidRef}
                               type="number"
                               min="0"
                               max={bookingDeductible || undefined}
@@ -2518,23 +2511,22 @@ export default function FleetOpzApp() {
                               onChange={(e) => {
                                 const v = e.target.value;
                                 if (v !== "" && Number(v) < 0) return;
-                                // Can't collect more than the agreed deposit — cap the entry.
-                                // (Entering less than the full deposit is still allowed here;
-                                // that's caught as a validation error, not blocked at input time.)
+                                // Cap at the agreed deposit — you can't collect more than the deposit.
                                 const capped = v !== "" && bookingDeductible > 0 ? String(Math.min(Number(v), bookingDeductible)) : v;
-                                clearFieldError("depositPaid");
                                 setNewBookingData({ ...newBookingData, depositPaid: capped });
                               }}
-                              placeholder={`Enter full deposit amount (${formatSGD(bookingDeductible)})`}
-                              style={{
-                                ...bookingFieldInputStyle(false, !!fieldErrors.depositPaid),
-                                ...(fieldErrors.depositPaid ? { background: "#fef2f2" } : null),
-                              }}
+                              placeholder={`Full deposit (${formatSGD(bookingDeductible)})`}
+                              style={bookingFieldInputStyle(false)}
                             />
                             <div style={{ fontSize: 10, color: C.textMuted, marginTop: 3 }}>
-                              Partial deposits aren't allowed — enter the full deposit amount of {formatSGD(bookingDeductible)}.
+                              {(() => {
+                                const paidNow = String(newBookingData.depositPaid).trim() === "" ? bookingDeductible : Math.min(Number(newBookingData.depositPaid) || 0, bookingDeductible);
+                                const remaining = bookingDeductible - paidNow;
+                                return remaining > 0
+                                  ? `Partial deposit — ${formatSGD(remaining)} still owed (folds into Balance Due). Leave blank to collect the full ${formatSGD(bookingDeductible)}.`
+                                  : `Full deposit. Leave blank for the full amount, or enter less to collect a partial deposit now.`;
+                              })()}
                             </div>
-                            <FieldErr msg={fieldErrors.depositPaid} />
                           </div>
                           <div>
                             <label style={bookingFieldLabelStyle}>Deposit Method</label>
@@ -2731,7 +2723,6 @@ export default function FleetOpzApp() {
                         {editingBookingId && (() => {
                           const editingBooking = fleetData.bookings.find(b => b.id === editingBookingId);
                           const alreadyHandedOver = !!editingBooking?.handoverAt;
-                          const { balanceDue: editingBalanceDue } = editingBooking ? computeBookingInvoice(editingBooking) : { balanceDue: 0 };
                           return alreadyHandedOver ? (
                             <div style={{ marginTop: 18, border: `1px solid ${C.tealFaint}`, borderRadius: 10, padding: "14px 16px", background: C.tealFaint }}>
                               <div style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>✅ Vehicle Handover completed</div>
@@ -2744,13 +2735,7 @@ export default function FleetOpzApp() {
                               <div style={{ fontSize: 13, fontWeight: 700, color: C.navy, marginBottom: 4 }}>🔑 Vehicle Handover</div>
                               <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 16 }}>
                                 When the customer arrives for pickup, record the starting mileage, fuel, and condition below.
-                                The full rental amount must be collected first — collect it from Pricing &amp; Payment, then
-                                completing this moves the booking to Active and generates the Rental Agreement.
-                                {editingBalanceDue > 0 && (
-                                  <div style={{ marginTop: 8, color: "#92400e", fontWeight: 600 }}>
-                                    ⚠ Balance due: {formatSGD(editingBalanceDue)} — collect this before completing handover.
-                                  </div>
-                                )}
+                                Completing this moves the booking to Active and generates the Rental Agreement.
                               </div>
                               <div style={{ marginBottom: 14 }}>
                                 <label style={bookingFieldLabelStyle}>Starting Mileage (km) <span style={{ color: C.red }}>*</span></label>
@@ -2798,13 +2783,7 @@ export default function FleetOpzApp() {
                                   style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12, fontFamily: "inherit", outline: "none", resize: "vertical", boxSizing: "border-box" }}
                                 />
                               </div>
-                              <Btn
-                                primary
-                                disabled={editingBalanceDue > 0}
-                                title={editingBalanceDue > 0 ? `Collect the full balance (${formatSGD(editingBalanceDue)}) before completing handover` : undefined}
-                                style={editingBalanceDue > 0 ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
-                                onClick={handleCompleteHandover}
-                              >✅ Complete Handover</Btn>
+                              <Btn primary onClick={handleCompleteHandover}>✅ Complete Handover</Btn>
                             </div>
                           );
                         })()}

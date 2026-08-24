@@ -258,15 +258,7 @@ const computeFleetStatus = (car, bookingsWithStatus) => {
 //                   exact effective-end day itself (free from the return
 //                   time onward). A day can carry both availableFrom AND
 //                   availableUntil if one booking returns and a different
-//                   one begins that same calendar day — OR if a single
-//                   booking both starts and ends within that same day (e.g.
-//                   8:00 AM–12:00 PM): the day stays "Available" overall,
-//                   blocked only for that exact window (availableUntil =
-//                   pickup time, availableFrom = return time), rather than
-//                   marking the whole day "On Rental". Two markers can only
-//                   express ONE blocked window per day, though — a third
-//                   booking touching the same day can't be fully represented
-//                   this way and may under-report a gap as available.
+//                   one begins that same calendar day.
 // Exported so Booking.jsx renders from this, rather than re-deriving statuses itself.
 export const computeCarAvailabilityTimeline = (car, bookings, days = 10, fromDateStr) => {
   const start = fromDateStr ? new Date(fromDateStr) : new Date();
@@ -318,23 +310,11 @@ export const computeCarAvailabilityTimeline = (car, bookings, days = 10, fromDat
         const isOverdueNow = !returned && todayStr > toDateStr(b.end);
 
         if (bStart === bEffEnd) {
-          // Picked up and effectively ended within the same calendar day
-          // (e.g. an 8:00 AM–12:00 PM booking) — block only that exact
-          // window, using the same availableUntil/availableFrom markers a
-          // same-day turnover between two DIFFERENT bookings already uses.
-          // The rest of the day remains bookable.
-          if (dateStr === bStart) {
-            const pickupT = timeOf(b.start);
-            const returnT = timeOf(effectiveEndSrc);
-            if (pickupT && returnT) {
-              if (startTurnoverTime === null || pickupT < startTurnoverTime) startTurnoverTime = pickupT;
-              if (turnoverTime === null || returnT > turnoverTime) turnoverTime = returnT;
-            } else {
-              // No usable time info to split on — fall back to blocking the
-              // whole day rather than guessing.
-              occupied = true;
-            }
-          }
+          // Picked up and effectively ended within the same calendar day —
+          // can't cleanly split into "available until"/"available from"
+          // windows without knowing the exact order relative to any other
+          // same-day booking, so keep this one simple: the whole day is out.
+          if (dateStr === bStart) occupied = true;
           continue;
         }
 
@@ -682,10 +662,23 @@ export const useFleetData = () => {
   // Every mutation follows the same pattern: update local state immediately
   // (optimistic — the UI feels instant), then persist to the backend; if the
   // write fails, onWriteError reloads authoritative state from the server.
+  // A car's all-in acquisition cost — what it cost to put the vehicle on the
+  // road. Recorded once as a single "Vehicle Purchase" expense per car so the
+  // Expenses/P&L totals reflect the capital deployed on the fleet.
+  const acquisitionCost = (c) =>
+    (parseFloat(c.purchase) || 0) + (parseFloat(c.purchaseAdvance ?? c.purchase_advance) || 0) +
+    (parseFloat(c.insurance) || 0) +
+    (parseFloat(c.reg) || 0) + (parseFloat(c.otherCharges ?? c.other_charges) || 0);
+  // The auto-created purchase expense for a plate (matched by plate + category
+  // so it survives a reload — no extra column needed).
+  const findPurchaseExpense = (plate) =>
+    expenses.find(e => e.plate === plate && e.category === "Vehicle Purchase");
+
   const addFleet = (car) => {
     const newCar = {
       ...car,
       purchase: parseFloat(car.purchase),
+      purchaseAdvance: parseFloat(car.purchaseAdvance || 0),
       insurance: parseFloat(car.insurance),
       reg: parseFloat(car.reg),
       otherCharges: parseFloat(car.otherCharges || 0),
@@ -693,16 +686,53 @@ export const useFleetData = () => {
     };
     setFleet(prev => [...prev, newCar]);
     api.post("/fleet", newCar).catch(onWriteError);
+    // Auto-post the acquisition cost as a "Vehicle Purchase" expense.
+    const amount = acquisitionCost(newCar);
+    if (amount > 0) {
+      addExpense({
+        plate: newCar.plate,
+        date: newCar.purchaseDate || new Date().toISOString().slice(0, 10),
+        category: "Vehicle Purchase",
+        desc: `${newCar.make || ""} ${newCar.model || ""}`.trim() || "Vehicle acquisition",
+        amount,
+        receipt: false,
+      });
+    }
   };
 
   const updateFleet = (plate, updates) => {
     setFleet(prev => prev.map(c => c.plate === plate ? { ...c, ...updates } : c));
     api.put(`/fleet/${encodeURIComponent(plate)}`, updates).catch(onWriteError);
+    // Keep the auto "Vehicle Purchase" expense in sync when any cost field moves.
+    const costChanged = ["purchase", "purchaseAdvance", "insurance", "reg", "otherCharges"].some(f => f in updates);
+    if (costChanged || "purchaseDate" in updates) {
+      const car = fleet.find(c => c.plate === plate);
+      const merged = { ...car, ...updates };
+      const exp = findPurchaseExpense(plate);
+      const nextAmount = acquisitionCost(merged);
+      if (exp) {
+        updateExpense(exp.id, {
+          amount: nextAmount,
+          ...(("purchaseDate" in updates) && merged.purchaseDate ? { date: merged.purchaseDate } : {}),
+        });
+      } else if (nextAmount > 0) {
+        // Older car with no purchase expense yet — create it now.
+        addExpense({
+          plate, date: merged.purchaseDate || new Date().toISOString().slice(0, 10),
+          category: "Vehicle Purchase",
+          desc: `${merged.make || ""} ${merged.model || ""}`.trim() || "Vehicle acquisition",
+          amount: nextAmount, receipt: false,
+        });
+      }
+    }
   };
 
   const deleteFleet = (plate) => {
     setFleet(prev => prev.filter(c => c.plate !== plate));
     api.del(`/fleet/${encodeURIComponent(plate)}`).catch(onWriteError);
+    // Remove the auto-created purchase expense alongside the car.
+    const exp = findPurchaseExpense(plate);
+    if (exp) deleteExpense(exp.id);
   };
 
   // Exposed to the booking form so it can block double-bookings before
@@ -712,21 +742,51 @@ export const useFleetData = () => {
     findOverlappingBooking(bookings, plate, start, end, excludeBookingId);
 
   // ── BOOKING OPERATIONS ────────────────────────────────────────────────────
+  const nextBookingId = (list) =>
+    `BK-${String(Math.max(...list.map(b => parseInt(b.id.slice(3)) || 0), 0) + 1).padStart(3, "0")}`;
+
+  // Persists a booking, retrying with a freshly-computed ID if the server
+  // rejects it as a duplicate — this happens when two sessions submit a new
+  // booking at nearly the same moment and both compute the same "next" ID
+  // from their own (equally stale) local state. The customer directory is
+  // synced ONLY once the booking write is actually confirmed, so a booking
+  // that ultimately fails never leaves behind an orphan customer record.
+  const persistBooking = (toSave, attempt = 0) => {
+    api.post("/bookings", toSave)
+      .then(() => {
+        saveCustomer(toSave);
+      })
+      .catch((err) => {
+        const isDuplicateId = err?.status === 409
+          || /duplicate|already exists|conflict/i.test(err?.message || "");
+        if (isDuplicateId && attempt < 3) {
+          // Another session's booking landed on the same ID first. Re-check
+          // the server's current bookings, compute the real next-free ID,
+          // swap this booking over to it locally, and retry the write.
+          api.get("/bookings").then(serverBookings => {
+            const retried = { ...toSave, id: nextBookingId(serverBookings) };
+            setBookings(prev => prev.map(b => b.id === toSave.id ? retried : b));
+            persistBooking(retried, attempt + 1);
+          }).catch(() => onWriteError(err));
+          return;
+        }
+        onWriteError(err);
+      });
+  };
+
   const addBooking = (booking) => {
     // Built synchronously (not inside a setState updater) so it's ready to
     // return immediately — FleetOpzApp.jsx passes the returned booking straight
-    // into generateRentalAgreementPdf. The server POST happens in the background.
-    const nextId = `BK-${String(Math.max(...bookings.map(b => parseInt(b.id.slice(3))), 0) + 1).padStart(3, "0")}`;
+    // into generateRentalAgreementPdf. The server POST happens in the background;
+    // persistBooking above resolves an ID collision (and retries) if one occurs.
     const newBooking = {
       ...booking,
-      id: nextId,
+      id: nextBookingId(bookings),
       rate: parseFloat(booking.rate),
       status: booking.status || "Active",
     };
     setBookings(prev => [...prev, newBooking]);
-    api.post("/bookings", newBooking).catch(onWriteError);
-    // Keep the customer directory in sync — create/update this customer by IC.
-    saveCustomer(newBooking);
+    persistBooking(newBooking);
     return newBooking;
   };
 
@@ -1065,7 +1125,9 @@ export const useFleetData = () => {
     const carExpenses = expenses.filter(e => e.plate === plate).reduce((sum, e) => sum + (e.amount || 0), 0);
     const carBookings = bookings.filter(b => b.plate === plate).length;
     const car = fleet.find(c => c.plate === plate);
-    const totalInv = car ? (car.purchase + car.insurance + car.reg) : 0;
+    const totalInv = car
+      ? ((car.purchase || 0) + (car.purchaseAdvance || 0) + (car.insurance || 0) + (car.reg || 0) + (car.otherCharges || 0))
+      : 0;
     const recoveryPct = totalInv > 0 ? Math.round((carEarnings / totalInv) * 100) : 0;
 
     return {

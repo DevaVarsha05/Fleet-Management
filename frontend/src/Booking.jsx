@@ -46,15 +46,6 @@ const fmtTimeShort = (hhmm) => {
   h = h % 12 || 12;
   return m ? `${h}:${String(m).padStart(2, "0")}${ap}` : `${h}${ap}`;
 };
-// "8:00 AM" -> "8 AM" — drops on-the-hour minutes for the compact "Booked:
-// 8 AM–12 PM" label.
-const fmtTimeClean = (hhmm) => {
-  if (!hhmm) return "";
-  let [h, m] = hhmm.split(":").map(Number);
-  const ap = h >= 12 ? "PM" : "AM";
-  h = h % 12 || 12;
-  return m ? `${h}:${String(m).padStart(2, "0")} ${ap}` : `${h} ${ap}`;
-};
 
 // Professional 10-day horizontal Gantt-style strip for a single car, built
 // entirely from computeCarAvailabilityTimeline (useFleetData.js) — the single
@@ -72,55 +63,36 @@ export const AvailabilityTimeline = ({ car, bookings = [] }) => {
         10-Day Availability — <span style={{ ...mono, color: C.navy }}>{car.plate}</span>
       </div>
       <div style={{ display: "flex", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
-        {timeline.map(({ date, status, availableFrom, availableUntil }, i) => {
-          // A single booking that both starts and ends today leaves BOTH
-          // availableFrom (its return time) and availableUntil (its pickup
-          // time) set, with availableUntil < availableFrom — a real booked
-          // window in the middle of an otherwise free day. That's distinct
-          // from a turnover between two DIFFERENT bookings, where
-          // availableFrom < availableUntil (a free gap, not a booking).
-          const booked = availableFrom && availableUntil && availableUntil < availableFrom
-            ? { from: availableUntil, until: availableFrom }
-            : null;
-          return (
-            <div
-              key={date}
-              title={
-                booked
-                  ? `${date}: Booked ${fmtTimeClean(booked.from)}–${fmtTimeClean(booked.until)} — rest of day available`
-                  : availableFrom ? `${date}: available from ${fmtTime(availableFrom)} (car returns this day)` : `${date}: ${status}`
-              }
-              style={{
-                flex: 1,
-                textAlign: "center",
-                padding: "8px 2px",
-                background: STATUS_PILL_FAINT[status] || C.bg,
-                borderRight: i < timeline.length - 1 ? `1px solid ${C.border}` : "none",
-              }}
-            >
-              <div style={{
-                width: 8, height: 8, borderRadius: "50%", margin: "0 auto 4px",
-                background: booked ? C.red : availableFrom ? C.amber : (STATUS_PILL_COLORS[status] || C.textMuted),
-                boxShadow: booked ? `0 0 0 2px ${C.red}33` : availableFrom ? `0 0 0 2px ${C.amber}33` : "none",
-              }} />
-              <div style={{
-                fontSize: 9, color: date === todayStr ? C.navy : C.textMuted,
-                fontWeight: date === todayStr ? 700 : 500,
-              }}>
-                {formatDayLabel(date)}
-              </div>
-              {booked ? (
-                <div style={{ fontSize: 7.5, color: C.red, fontWeight: 700, marginTop: 1, lineHeight: 1.2 }}>
-                  Booked<br />{fmtTimeShort(booked.from)}–{fmtTimeShort(booked.until)}
-                </div>
-              ) : availableFrom && (
-                <div style={{ fontSize: 8, color: C.amber, fontWeight: 700, marginTop: 1, lineHeight: 1 }}>
-                  {fmtTimeShort(availableFrom)}
-                </div>
-              )}
+        {timeline.map(({ date, status, availableFrom }, i) => (
+          <div
+            key={date}
+            title={availableFrom ? `${date}: available from ${fmtTime(availableFrom)} (car returns this day)` : `${date}: ${status}`}
+            style={{
+              flex: 1,
+              textAlign: "center",
+              padding: "8px 2px",
+              background: STATUS_PILL_FAINT[status] || C.bg,
+              borderRight: i < timeline.length - 1 ? `1px solid ${C.border}` : "none",
+            }}
+          >
+            <div style={{
+              width: 8, height: 8, borderRadius: "50%", margin: "0 auto 4px",
+              background: availableFrom ? C.amber : (STATUS_PILL_COLORS[status] || C.textMuted),
+              boxShadow: availableFrom ? `0 0 0 2px ${C.amber}33` : "none",
+            }} />
+            <div style={{
+              fontSize: 9, color: date === todayStr ? C.navy : C.textMuted,
+              fontWeight: date === todayStr ? 700 : 500,
+            }}>
+              {formatDayLabel(date)}
             </div>
-          );
-        })}
+            {availableFrom && (
+              <div style={{ fontSize: 8, color: C.amber, fontWeight: 700, marginTop: 1, lineHeight: 1 }}>
+                {fmtTimeShort(availableFrom)}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8 }}>
         {TIMELINE_STATUSES.map(s => (
@@ -133,10 +105,6 @@ export const AvailabilityTimeline = ({ car, bookings = [] }) => {
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.amber, boxShadow: `0 0 0 2px ${C.amber}33` }} />
           <span style={{ fontSize: 10, color: C.textMuted }}>Available after return time</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.red, boxShadow: `0 0 0 2px ${C.red}33` }} />
-          <span style={{ fontSize: 10, color: C.textMuted }}>Booked part of day — rest available</span>
-        </div>
       </div>
     </div>
   );
@@ -147,19 +115,6 @@ const formatDateTime = (v) => {
   const d = new Date(v);
   if (isNaN(d)) return v;
   return d.toLocaleString(undefined, { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-};
-
-// Shared duration label for both the Bookings table (compact) and the
-// Overview tab (full "N Hour(s)" / "N Day(s)"). Takes the isHourly/hours/days
-// trio computeBookingInvoice already returns — never recomputes duration
-// itself, so this always matches what was actually billed.
-// `compact`: table cell — hourly shows "8.5 hrs" (unit made explicit per
-// request), daily keeps the existing plain number (e.g. "4"), unchanged.
-const formatRentalDuration = ({ isHourly, hours, days }, compact = false) => {
-  if (isHourly) {
-    return compact ? `${hours} hrs` : `${hours} Hour${hours === 1 ? "" : "s"}`;
-  }
-  return compact ? `${days}` : `${days} Day${days === 1 ? "" : "s"}`;
 };
 
 // Vehicle Handover is tracked by its own timestamp (handoverAt), separate
@@ -212,19 +167,12 @@ export const CHARGE_TYPES = [
 //     Payments section use for Balance Due.
 // Security Deposit is intentionally excluded from both — it's refundable,
 // not a rental charge, so it's tracked as its own figure.
-export const computeBookingInvoice = (b) => {
+const computeBookingInvoice = (b) => {
   // Once a vehicle is actually returned, actualReturnAt reflects when it
   // really came back (early or late) — the invoice should bill for that,
   // not the originally planned end date/time.
   const effectiveEnd = b.actualReturnAt || b.end;
   const days = (b.start && effectiveEnd) ? Math.max(0, Math.round((new Date(effectiveEnd) - new Date(b.start)) / 86400000)) : 0;
-  // Hourly display duration — same "Hourly" rule the New Booking wizard uses
-  // (FleetOpzApp.jsx's bookingIsHourly): under 24 hours is Hourly, 24+ is
-  // Daily. This only feeds display (Bookings table + Overview tab); it never
-  // touches `days` or any billing math, which are unchanged.
-  const hoursExact = (b.start && effectiveEnd) ? Math.max(0, (new Date(effectiveEnd) - new Date(b.start)) / 3600000) : 0;
-  const isHourly = hoursExact > 0 && hoursExact < 24;
-  const hours = Math.round(hoursExact * 10) / 10; // exact duration, rounded to 1 decimal (e.g. 7.5)
   // Rental charge is the stored Total Rental Amount when present — that's the
   // source of truth entered in Pricing & Charges (it already accounts for
   // hourly/short rentals and any rate the staff agreed). Older bookings that
@@ -304,7 +252,7 @@ export const computeBookingInvoice = (b) => {
   const grandBalanceDue = Math.max(0, grandTotal - grandTotalPaid);
 
   return {
-    days, isHourly, hours, rateCharge, deliveryCharge, collectionCharge, additionalDriverCharge, otherCharges, deposit, vatPct,
+    days, rateCharge, deliveryCharge, collectionCharge, additionalDriverCharge, otherCharges, deposit, vatPct,
     depositPaid, grandTotal, grandTotalPaid, grandBalanceDue,
     agreementSubtotal, agreementVatAmount, agreementTotal,
     charges, bookingCharges, postCharges,
@@ -571,68 +519,42 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
   }
   const STAGES = ["Upcoming", "Handover", "On Rental", "Returned", "Closed"];
 
-  // Save & Generate Agreement — now gated on the full rental amount being
-  // collected first. If a balance is still outstanding, this stops and
-  // sends staff to collect it (via Collect Rent Amount / Collect Full
-  // Balance Now above, or Record Payment) rather than generating the
-  // Agreement against an unpaid balance.
   const handleCompleteHandover = () => {
-    // Handover can't happen before the customer is due to collect the car —
-    // gate it on the scheduled pickup time (real clock, same basis as pickupArrived).
-    if (!pickupArrived) { alert(`Vehicle Handover is allowed only at the scheduled pickup time or later (${formatDateTime(booking.start)}).`); return; }
     if (startingMileage === "" || Number(startingMileage) < 0) { alert("Enter a valid Starting Mileage"); return; }
     if (!fuelLevel) { alert("Select the Fuel Level at pickup"); return; }
-    if (inv.balanceDue > 0) {
-      alert(`Collect the full rental amount before generating the Agreement. Balance due: ${fmt(inv.balanceDue)}.`);
+
+    // Rent at pickup — optional, not a gate. Clamp to Balance Due (no overpay);
+    // every payment needs a Receipt/Reference No. It's recorded as a real
+    // payment appended to the single `payments` source of truth so Balance Due
+    // updates itself.
+    const rentAmt = Math.min(Math.max(0, Number(rentAtPickup) || 0), inv.balanceDue);
+    if (rentAmt > 0 && !rentReference.trim()) {
+      alert("Enter the Receipt / Reference No.");
       return;
     }
+    if (rentAmt > 0 && (!rentDate || !rentTime)) { alert("Enter the rent payment date & time"); return; }
 
+    const rentPaymentEntry = rentAmt > 0
+      ? [{
+          id: `rent-${Date.now()}`,
+          amount: rentAmt,
+          method: rentMethod,
+          reference: rentReference.trim(),
+          addedAt: `${rentDate}T${rentTime}`,
+          by: actor,
+        }]
+      : [];
     const updates = {
       startingMileage, fuelLevel, vehicleCondition, handoverAt: new Date().toISOString(), status: "Active",
-      history: withHistory(histEntry("handover", `Odometer ${startingMileage} km · Fuel ${fuelLevel}`)),
+      ...(rentPaymentEntry.length ? { payments: [...inv.payments, ...rentPaymentEntry] } : {}),
+      history: withHistory(histEntry("handover", `Odometer ${startingMileage} km · Fuel ${fuelLevel}${rentAmt > 0 ? ` · Collected ${fmt(rentAmt)} (${rentMethod})` : ""}`)),
     };
     onUpdateBooking(booking.id, updates);
     // The Rental Agreement needs mileage/fuel/condition — generate it now.
-    // This call never touches `payments` itself (the balance was already
-    // confirmed clear above), so it can never mark anything as paid.
     generateRentalAgreementPdf({ ...booking, ...updates }, car);
     setShowHandover(false);
-  };
-
-  // "Collect Rent Amount" — a standalone payment action, separate from Save
-  // & Generate Agreement. Records whatever amount staff actually entered
-  // (must be > 0, up to Balance Due) as a real payment appended to the
-  // single `payments` source of truth. Doesn't touch handover/mileage/fuel/
-  // agreement — those only ever happen via Save & Generate Agreement above.
-  const handleCollectRentAmount = () => {
-    if (inv.balanceDue <= 0) return;
-    if (rentAtPickup === "") {
-      alert(`Enter the Rent Amount collected. Balance due: ${fmt(inv.balanceDue)}.`);
-      return;
-    }
-    const rentAmt = Math.min(Math.max(0, Number(rentAtPickup) || 0), inv.balanceDue);
-    if (rentAmt <= 0) { alert("Enter an amount greater than 0 to record a payment."); return; }
-    if (rentMethod !== "Cash" && !rentReference.trim()) {
-      alert("Enter the Receipt / Reference No. (required unless payment method is Cash).");
-      return;
-    }
-    if (!rentDate || !rentTime) { alert("Enter the rent payment date & time"); return; }
-
-    const newPayment = {
-      id: `rent-${Date.now()}`,
-      amount: rentAmt,
-      method: rentMethod,
-      reference: rentReference.trim(),
-      addedAt: `${rentDate}T${rentTime}`,
-      by: actor,
-    };
-    onUpdateBooking(booking.id, {
-      payments: [...inv.payments, newPayment],
-      history: withHistory(histEntry("payment", `Collected ${fmt(rentAmt)} (${rentMethod})${rentReference.trim() ? ` · Ref ${rentReference.trim()}` : ""} at pickup`)),
-    });
     setRentAtPickup("");
     setRentReference("");
-    setFullyCollectedNotice(rentAmt >= inv.balanceDue);
   };
 
   // "Collect Now" — a standalone action separate from Save & Generate
@@ -641,20 +563,9 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
   // the full amount without stepping through the rest of the handover form.
   const handleCollectNow = () => {
     if (inv.balanceDue <= 0) return;
-    // Rent Amount must be entered AND must exactly equal the full balance due —
-    // this button only ever collects the full amount, so a partial/mismatched
-    // entry is rejected rather than silently collecting the full balance anyway.
-    if (rentAtPickup === "") {
-      alert(`Enter the Rent Amount collected (0 if none) before collecting the full balance. Balance due: ${fmt(inv.balanceDue)}.`);
-      return;
-    }
-    if (Number(rentAtPickup) !== inv.balanceDue) {
-      alert(`This collects the FULL balance only. Enter exactly ${fmt(inv.balanceDue)} in Rent Amount, or record a partial payment separately.`);
-      return;
-    }
-    // Receipt / Reference No. is mandatory for any non-cash payment.
-    if (rentMethod !== "Cash" && !rentReference.trim()) {
-      alert("Enter the Receipt / Reference No. (required unless payment method is Cash).");
+    // Receipt / Reference No. is mandatory for every payment.
+    if (!rentReference.trim()) {
+      alert("Enter the Receipt / Reference No.");
       return;
     }
     if (!rentDate || !rentTime) {
@@ -1002,10 +913,8 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                       <textarea value={vehicleCondition} onChange={(e) => setVehicleCondition(e.target.value)} placeholder="Any scratches, dents, notes…" style={{ ...detailInputStyle, minHeight: 52, resize: "vertical" }} />
                     </div>
 
-                    {/* Rent collected at pickup — this must be settled before Save &
-                        Generate Agreement will proceed (see handleCompleteHandover's
-                        balanceDue check). Use Collect Rent Amount for a partial/exact
-                        entry or Collect Full Balance Now to settle it all in one step. */}
+                    {/* Rent collected at pickup — the rental amount is taken here in
+                        the deposit-first flow. Optional (doesn't block handover). */}
                     {inv.balanceDue > 0 && (
                       <div style={{ marginTop: 12, borderTop: `1px dashed ${C.border}`, paddingTop: 12 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
@@ -1015,11 +924,11 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
                           <div style={{ flex: "1 1 140px" }}>
                             <div style={detailFieldLabelStyle}>Rent Amount</div>
-                            <input type="number" min="0" max={inv.balanceDue} value={rentAtPickup} onChange={(e) => { setRentAtPickup(e.target.value); setFullyCollectedNotice(false); }} placeholder="0.00" style={detailInputStyle} />
+                            <input type="number" min="0" max={inv.balanceDue} value={rentAtPickup} onChange={(e) => setRentAtPickup(e.target.value)} placeholder="0.00" style={detailInputStyle} />
                           </div>
                           <div style={{ flex: "1 1 120px" }}>
                             <div style={detailFieldLabelStyle}>Method</div>
-                            <select value={rentMethod} onChange={(e) => { setRentMethod(e.target.value); setFullyCollectedNotice(false); }} style={detailInputStyle}>
+                            <select value={rentMethod} onChange={(e) => setRentMethod(e.target.value)} style={detailInputStyle}>
                               {["Cash", "Card", "Bank Transfer", "Online"].map((m) => <option key={m} value={m}>{m}</option>)}
                             </select>
                           </div>
@@ -1032,28 +941,24 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                             <input type="time" value={rentTime} onChange={(e) => setRentTime(e.target.value)} style={detailInputStyle} />
                           </div>
                           <div style={{ flex: "1 1 160px" }}>
-                            <div style={detailFieldLabelStyle}>Receipt / Ref No.{rentMethod !== "Cash" ? " *" : ""}</div>
-                            <input type="text" value={rentReference} onChange={(e) => { setRentReference(e.target.value); setFullyCollectedNotice(false); }} placeholder={rentMethod === "Cash" ? "optional" : "required for non-cash"} style={detailInputStyle} />
+                            <div style={detailFieldLabelStyle}>Receipt / Ref No. *</div>
+                            <input type="text" value={rentReference} onChange={(e) => { setRentReference(e.target.value); setFullyCollectedNotice(false); }} placeholder="required" style={detailInputStyle} />
                           </div>
                         </div>
                         {(() => {
-                          const nothingEntered = rentAtPickup === "";
                           const entered = Math.min(Math.max(0, Number(rentAtPickup) || 0), inv.balanceDue);
                           const remaining = inv.balanceDue - entered;
                           return (
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: C.navy }}>
-                                {nothingEntered ? "Enter the amount collected" : "Balance after this"}
-                              </span>
-                              <span style={{ fontSize: 13, fontWeight: 700, color: nothingEntered ? C.textMuted : (remaining <= 0 ? C.teal : "#d97706"), ...mono }}>
-                                {nothingEntered ? `${fmt(inv.balanceDue)} due` : fmt(remaining)}
-                              </span>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: C.navy }}>Balance after this</span>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: remaining <= 0 ? C.teal : "#d97706", ...mono }}>{fmt(remaining)}</span>
                             </div>
                           );
                         })()}
-                        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>The full rental amount must be collected before the Agreement can be generated. Click "Collect Rent Amount" to record what's entered above, or "Collect Full Balance Now" to settle it all in one step.</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                          <Btn onClick={handleCollectRentAmount}>Collect Rent Amount</Btn>
+                        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>Optional — leave blank, or collect part now; any remaining balance can be collected later (e.g. at return).</div>
+                        {/* Collect Now — settles the FULL balance immediately without
+                            stepping through the rest of the handover form. */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
                           <Btn onClick={handleCollectNow}>Collect Full Balance Now ({fmt(inv.balanceDue)})</Btn>
                           {fullyCollectedNotice && <span style={{ fontSize: 11.5, fontWeight: 600, color: C.teal }}>✓ Balance fully collected.</span>}
                         </div>
@@ -1061,13 +966,7 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                     )}
 
                     <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                      <Btn
-                        primary
-                        disabled={inv.balanceDue > 0}
-                        title={inv.balanceDue > 0 ? `Collect the full balance (${fmt(inv.balanceDue)}) before generating the Agreement` : undefined}
-                        style={inv.balanceDue > 0 ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
-                        onClick={handleCompleteHandover}
-                      >Save &amp; Generate Agreement</Btn>
+                      <Btn primary onClick={handleCompleteHandover}>Save &amp; Generate Agreement</Btn>
                       <Btn onClick={() => setShowHandover(false)}>Cancel</Btn>
                     </div>
                   </div>
@@ -1077,17 +976,12 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>Next step: Complete Vehicle Handover</div>
                       <div style={{ fontSize: 11.5, color: C.textMuted }}>
-                        {pickupArrived
-                          ? "Record starting mileage, fuel & condition, and collect the full rental amount, to activate the rental and generate the Rental Agreement."
-                          : `Handover opens at the scheduled pickup time — ${formatDateTime(booking.start)}.`}
+                        Collect the rent, record starting mileage, fuel & condition to activate the rental and generate the Rental Agreement.
                       </div>
                     </div>
                     <Btn
                       primary
-                      disabled={!pickupArrived}
-                      title={!pickupArrived ? `Available at the scheduled pickup time (${formatDateTime(booking.start)})` : undefined}
-                      style={!pickupArrived ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
-                      onClick={() => { setRentAtPickup(""); setRentReference(""); setFullyCollectedNotice(false); setShowHandover(true); }}
+                      onClick={() => { setRentAtPickup(inv.balanceDue > 0 ? String(inv.balanceDue) : ""); setShowHandover(true); }}
                     >
                       Complete Handover →
                     </Btn>
@@ -1132,7 +1026,7 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                   { label: "Rental Period", value: `${formatDateTime(booking.start)} → ${formatDateTime(booking.end)}` },
                   { label: "Pickup Date & Time", value: formatDateTime(booking.start) || "—" },
                   { label: "Return Date & Time", value: formatDateTime(booking.end) || "—" },
-                  { label: inv.isHourly ? "Total Rental Hours" : "Total Rental Days", value: formatRentalDuration(inv) },
+                  { label: "Total Rental Days", value: `${inv.days} Day${inv.days === 1 ? "" : "s"}` },
                 ].map(row => (
                   <div key={row.label} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "3px 0", fontSize: 12 }}>
                     <span style={{ color: C.textMuted }}>{row.label}</span>
@@ -1723,7 +1617,7 @@ const Booking = ({ bookings = [], fleet = [], onNewBooking, onAddBooking, onUpda
           </thead>
           <tbody>
             {filtered.map(b => {
-              const { days, isHourly, hours, agreementTotal: total } = computeBookingInvoice(b);
+              const { days, agreementTotal: total } = computeBookingInvoice(b);
               return (
                 <tr key={b.id} data-testid="booking-row" data-booking-id={b.id}
                   onClick={() => setTimelinePlate(b.plate)}
@@ -1736,7 +1630,7 @@ const Booking = ({ bookings = [], fleet = [], onNewBooking, onAddBooking, onUpda
                   <td style={{ padding: "11px 12px", ...mono, fontSize: 10, color: C.textMuted, whiteSpace: "nowrap" }}>{b.ic}</td>
                   <td style={{ padding: "11px 12px", fontSize: 11, color: C.textSec }}>{b.contact}</td>
                   <td style={{ padding: "11px 12px", fontSize: 11, color: C.textSec, whiteSpace: "nowrap" }}>{formatDateTime(b.start)} → {formatDateTime(b.end)}</td>
-                  <td style={{ padding: "11px 12px", ...mono, fontSize: 11, textAlign: "center", whiteSpace: "nowrap" }}>{formatRentalDuration({ isHourly, hours, days }, true)}</td>
+                  <td style={{ padding: "11px 12px", ...mono, fontSize: 11, textAlign: "center" }}>{days}</td>
                   <td style={{ padding: "11px 12px", ...mono, fontSize: 11, whiteSpace: "nowrap" }}>SGD {b.rate}/d</td>
                   <td style={{ padding: "11px 12px", ...mono, fontSize: 12, fontWeight: 700, color: C.teal, whiteSpace: "nowrap" }}>{fmt(total)}</td>
                   <td style={{ padding: "11px 12px", fontSize: 11, color: C.textMuted, whiteSpace: "nowrap" }}>{b.pickup}</td>

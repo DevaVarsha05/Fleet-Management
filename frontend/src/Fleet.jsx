@@ -231,6 +231,7 @@ const VehicleDetailsModal = ({ car, bookings, expenses, onAddExpense, onUpdateCa
       fuelType: car.fuelType || "Petrol",
       transmission: car.transmission || "Automatic",
       purchase: car.purchase ?? 0,
+      purchaseAdvance: car.purchaseAdvance ?? 0,
       insurance: car.insurance ?? 0,
       reg: car.reg ?? 0,
       otherCharges: car.otherCharges ?? 0,
@@ -285,6 +286,7 @@ const VehicleDetailsModal = ({ car, bookings, expenses, onAddExpense, onUpdateCa
       fuelType: editForm.fuelType,
       transmission: editForm.transmission,
       purchase: Number(editForm.purchase) || 0,
+      purchaseAdvance: Number(editForm.purchaseAdvance) || 0,
       insurance: Number(editForm.insurance) || 0,
       reg: Number(editForm.reg) || 0,
       otherCharges: Number(editForm.otherCharges) || 0,
@@ -439,6 +441,10 @@ const VehicleDetailsModal = ({ car, bookings, expenses, onAddExpense, onUpdateCa
                   <input type="number" min="0" value={editForm.purchase} onChange={(e) => setEditForm({ ...editForm, purchase: e.target.value })} style={fieldStyle} />
                 </div>
                 <div>
+                  <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, marginBottom: 3 }}>Purchase Advance (SGD)</div>
+                  <input type="number" min="0" value={editForm.purchaseAdvance} onChange={(e) => setEditForm({ ...editForm, purchaseAdvance: e.target.value })} style={fieldStyle} />
+                </div>
+                <div>
                   <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, marginBottom: 3 }}>Insurance (SGD)</div>
                   <input type="number" min="0" value={editForm.insurance} onChange={(e) => setEditForm({ ...editForm, insurance: e.target.value })} style={fieldStyle} />
                 </div>
@@ -454,6 +460,7 @@ const VehicleDetailsModal = ({ car, bookings, expenses, onAddExpense, onUpdateCa
             ) : (
               <>
                 <CompactRow label="Purchase" value={fmt(car.purchase)} />
+                <CompactRow label="Purchase Advance" value={fmt(car.purchaseAdvance || 0)} />
                 <CompactRow label="Insurance" value={fmt(car.insurance)} />
                 <CompactRow label="Registration" value={fmt(car.reg)} />
                 <CompactRow label="Other Charges" value={fmt(car.otherCharges || 0)} />

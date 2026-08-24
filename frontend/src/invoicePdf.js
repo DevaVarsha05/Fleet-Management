@@ -153,6 +153,24 @@ export const generateInvoicePdf = (booking, car, inv) => {
     { w: contentWidth * 0.4, text: "Vehicle Make & Model", bold: true },
     { w: contentWidth * 0.6, text: car?.model || "—" },
   ]);
+  const startMileage = booking.startingMileage;
+  const returnMileage = booking.mileageIn;
+  const kmDriven = (startMileage !== undefined && startMileage !== null && startMileage !== "" &&
+    returnMileage !== undefined && returnMileage !== null && returnMileage !== "")
+    ? Math.max(0, Number(returnMileage) - Number(startMileage))
+    : null;
+  y = cellRow(y, [
+    { w: contentWidth * 0.4, text: "Starting Mileage", bold: true },
+    { w: contentWidth * 0.6, text: startMileage !== undefined && startMileage !== null && startMileage !== "" ? `${startMileage} km` : "—" },
+  ]);
+  y = cellRow(y, [
+    { w: contentWidth * 0.4, text: "Return Mileage", bold: true },
+    { w: contentWidth * 0.6, text: returnMileage !== undefined && returnMileage !== null && returnMileage !== "" ? `${returnMileage} km` : "—" },
+  ]);
+  y = cellRow(y, [
+    { w: contentWidth * 0.4, text: "No. of KMs", bold: true },
+    { w: contentWidth * 0.6, text: kmDriven !== null ? `${kmDriven} km` : "—" },
+  ]);
   y += 7;
 
   // --- Rental Schedule ---
