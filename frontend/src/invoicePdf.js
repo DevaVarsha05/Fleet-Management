@@ -18,8 +18,8 @@ const COMPANY_INFO = {
   uen: "2022298",
   email: "ABCRental@gmail.com",
   phone: "94832832",
-  bank: "DBS Current: 026712387",
-  paynow: "PayNow UEN: 202523871",
+  bank: "DBS Current: 0721375478",
+  paynow: "PayNow UEN: 202416072K",
 };
 
 const pad2 = (n) => String(n).padStart(2, "0");
