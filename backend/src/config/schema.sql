@@ -256,18 +256,6 @@ INSERT INTO role_permissions (role, module, can_view, can_create, can_edit, can_
   ('Staff','Investors',false,false,false,false)
 ON CONFLICT (role, module) DO NOTHING;
 
--- ── SEED: sample fleet ──────────────────────────────────────────────────────
--- The original frontend shipped with these 8 demo cars (bookings/earnings/
--- expenses started empty). Seeded here so a fresh install isn't blank. Status
--- is stored as "Available"; the app derives live status from bookings anyway.
--- ON CONFLICT DO NOTHING makes re-running this file safe.
-INSERT INTO cars (plate, make, model, year, color, purchase, insurance, reg, other_charges, purchase_date, maint, coe, status) VALUES
-  ('SBA 1234 X', 'Toyota',  'Corolla', 2022, 'Silver', 26000, 1200, 1300, 0, '2022-01-15', 7.5, '2026-07-15', 'Available'),
-  ('SBC 5678 Y', 'Honda',   'Civic',   2021, 'White',  22000, 1100, 1100, 0, '2021-03-10', 7.5, '2028-03-20', 'Available'),
-  ('SBD 9012 Z', 'Mazda',   '3',       2023, 'Blue',   29000, 1400, 1600, 0, '2023-02-05', 7.5, '2028-11-10', 'Available'),
-  ('SBE 3456 A', 'Nissan',  'Sylphy',  2022, 'Black',  24500, 1200, 1100, 0, '2022-06-20', 7.5, '2027-06-30', 'Available'),
-  ('SBF 7890 B', 'Toyota',  'Vios',    2020, 'Red',    19500, 1000, 1000, 0, '2020-09-01', 9.0, '2025-09-15', 'Available'),
-  ('SBG 1122 C', 'Honda',   'Jazz',    2021, 'Grey',   20500, 1050,  950, 0, '2021-08-22', 7.5, '2026-08-22', 'Available'),
-  ('SBH 3344 D', 'Hyundai', 'Elantra', 2023, 'White',  25000, 1150, 1200, 0, '2023-01-05', 7.5, '2029-01-05', 'Available'),
-  ('SBI 5566 E', 'Kia',     'Cerato',  2022, 'Silver', 23000, 1100, 1050, 0, '2022-10-18', 7.5, '2027-10-18', 'Available')
-ON CONFLICT (plate) DO NOTHING;
+-- No seed fleet — a fresh install starts with zero cars. Add vehicles through
+-- the app (Fleet → Add Car). The role_permissions grid above is intentionally
+-- kept seeded, since the app's access control relies on it.
