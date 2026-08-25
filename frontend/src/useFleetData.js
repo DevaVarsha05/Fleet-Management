@@ -176,16 +176,21 @@ export const computeBookingStatus = (booking, todayStr) => {
   if (booking.forceCompleted) return resolveCompletion();
   if (!booking.start || !booking.end) return booking.status || "Active";
 
-  const startStr = toDateStr(booking.start);
   const endStr = toDateStr(booking.end);
-  if (todayStr < startStr) return "Upcoming";
 
-  // Pickup day has arrived (or even passed) but Vehicle Handover — capturing
-  // Starting Odometer, Starting Fuel, and Vehicle Condition — hasn't happened
-  // yet. Per the required lifecycle, a booking can't become Active without
-  // Handover actually completing, so it stays "Upcoming" (Booking.jsx's
+  // Vehicle Handover — capturing Starting Odometer, Starting Fuel, and
+  // Vehicle Condition — is what actually starts the rental. Per the required
+  // lifecycle, a booking can't become Active without Handover actually
+  // completing, so it stays "Upcoming" until handoverAt is set (Booking.jsx's
   // "⏳ Awaiting Handover" flag surfaces this to staff) instead of silently
-  // reporting Active with no Starting Mileage/Fuel/Condition on file.
+  // reporting Active with no Starting Mileage/Fuel/Condition on file. This is
+  // checked BEFORE any startStr comparison so an early handover (staff hand
+  // the car over ahead of the originally planned pickup date) correctly
+  // moves the booking to Active right away, rather than staying "Upcoming"
+  // until the calendar catches up to the planned start date. Once handover
+  // has genuinely happened, it no longer matters whether today is before,
+  // on, or after the originally planned start — only the end date decides
+  // Ending Today / Overdue / Active from here.
   if (!booking.handoverAt) return "Upcoming";
 
   if (todayStr === endStr) return "Ending Today";
@@ -194,7 +199,7 @@ export const computeBookingStatus = (booking, todayStr) => {
   // legitimately ending today). It never completes itself off a date alone;
   // Completed must be earned by a real return (see forceCompleted above).
   if (todayStr > endStr) return "Overdue";
-  return "Active"; // handed over, start <= today < end
+  return "Active"; // handed over, and (start <=) today < end
 };
 
 // A car's status is fully derived — Maintenance is the one state that can't

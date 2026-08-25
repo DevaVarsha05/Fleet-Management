@@ -176,6 +176,25 @@ export const generateInvoicePdf = (booking, car, inv) => {
   // --- Rental Schedule ---
   y = sectionHeader(y, "Rental Schedule");
   y += 1;
+  // Once the vehicle has actually been handed over, handoverAt reflects the
+  // real pickup date/time — possibly earlier or later than what was
+  // originally planned — and takes over the Pick-up column from the
+  // originally planned pickupDate/pickupTime, the same way actualReturnAt
+  // takes over the Drop-off column below. Unlike actualReturnAt (already a
+  // local "YYYY-MM-DDTHH:MM" string built from separate date/time inputs),
+  // handoverAt is a full UTC ISO timestamp (new Date().toISOString()), so it
+  // has to be converted to local date/time parts rather than string-split —
+  // otherwise this would show the raw UTC time instead of local time.
+  let pickupDateEffective = booking.pickupDate;
+  let pickupTimeEffective = booking.pickupTime;
+  if (booking.handoverAt) {
+    const hd = new Date(booking.handoverAt);
+    if (!isNaN(hd)) {
+      pickupDateEffective = `${hd.getFullYear()}-${pad2(hd.getMonth() + 1)}-${pad2(hd.getDate())}`;
+      pickupTimeEffective = `${pad2(hd.getHours())}:${pad2(hd.getMinutes())}`;
+    }
+  }
+
   // Once the vehicle has actually been returned, actualReturnAt ("YYYY-MM-DDTHH:MM")
   // reflects the real return date/time — possibly edited for an early or late
   // return — and takes over the Drop-off column from the originally planned
@@ -193,12 +212,12 @@ export const generateInvoicePdf = (booking, car, inv) => {
   ]);
   y = cellRow(y, [
     { w: col0, text: "Date", bold: true },
-    { w: col1, text: fmtDateSlash(booking.pickupDate), align: "center" },
+    { w: col1, text: fmtDateSlash(pickupDateEffective), align: "center" },
     { w: col2, text: fmtDateSlash(dropDate), align: "center" },
   ]);
   y = cellRow(y, [
     { w: col0, text: "Time", bold: true },
-    { w: col1, text: fmtTime12h(booking.pickupTime), align: "center" },
+    { w: col1, text: fmtTime12h(pickupTimeEffective), align: "center" },
     { w: col2, text: fmtTime12h(dropTime), align: "center" },
   ]);
   y = cellRow(y, [

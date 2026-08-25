@@ -601,9 +601,13 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
       alert("Enter a valid Final Odometer (shed) reading");
       return;
     }
-    // Customer return reading (B) is optional; when given it must sit between the
+    // Customer return reading (B) is now mandatory; it must sit between the
     // starting reading (A) and the final shed reading (C = mileageIn).
-    if (customerReturnMileage !== "") {
+    if (customerReturnMileage === "" || Number(customerReturnMileage) < 0) {
+      alert("Enter the Customer Return Odometer");
+      return;
+    }
+    {
       const b = Number(customerReturnMileage);
       const a = Number(booking.startingMileage) || 0;
       if (b < a || b > Number(mileageIn)) {
@@ -1191,8 +1195,8 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
                       <input type="time" value={actualReturnTime} onChange={(e) => setActualReturnTime(e.target.value)} style={detailInputStyle} />
                     </div>
                     <div style={{ flex: "1 1 160px" }}>
-                      <div style={detailFieldLabelStyle}>Customer Return Odo (km) · optional</div>
-                      <input type="number" min="0" value={customerReturnMileage} onChange={(e) => setCustomerReturnMileage(e.target.value)} placeholder="only if staff drove it back" style={detailInputStyle} />
+                      <div style={detailFieldLabelStyle}>Customer Return Odo (km)</div>
+                      <input type="number" min="0" value={customerReturnMileage} onChange={(e) => setCustomerReturnMileage(e.target.value)} placeholder="e.g., 272321" style={detailInputStyle} />
                     </div>
                     <div style={{ flex: "1 1 160px" }}>
                       <div style={detailFieldLabelStyle}>Final Odometer / Shed (km)</div>
@@ -1243,7 +1247,7 @@ const BookingDetailModal = ({ booking, bookings, fleet, activeTab, setActiveTab,
 
                     <Btn primary onClick={handleConfirmReturn}>Confirm Return & Generate Invoice</Btn>
                     <div style={{ flex: "1 1 100%", fontSize: 11, color: C.textMuted }}>
-                      <strong style={{ color: C.navy }}>Customer Return Odo</strong> is the reading when the customer handed the car back — leave it blank if they returned it directly. Any extra distance up to the <strong style={{ color: C.navy }}>Final Odometer</strong> is counted as company/internal (drive-back), not customer usage.
+                      <strong style={{ color: C.navy }}>Customer Return Odo</strong> is the reading when the customer handed the car back — if they returned it directly, enter the same value as the <strong style={{ color: C.navy }}>Final Odometer</strong>. Any extra distance up to the Final Odometer is counted as company/internal (drive-back), not customer usage.
                     </div>
                     <div style={{ flex: "1 1 100%", fontSize: 11, color: C.textMuted }}>
                       Starting Fuel (at Handover): <strong style={{ color: C.navy }}>{booking.fuelLevel || "—"}</strong> · compare against Fuel In above to decide the Fuel Charge. Any amount entered here is added to the invoice and Balance Due on confirm.
