@@ -24,6 +24,7 @@ import CashFlow from "./CashFlow";
 import PlReport from "./pl report";
 import Alert from "./Alert";
 import Settings from "./Settings";
+import AIAssistant from "./AIAssistant";
 
 // Shared styling for the New Booking wizard's Step 1 (Customer Details)
 // fields. These are plain <input>s rather than the shared <Input> component
@@ -2929,6 +2930,12 @@ export default function FleetOpzApp() {
           ]}
         />
       </Modal>
+
+      {/* AI ASSISTANT — floating button + chat panel, available to every
+          authenticated user on every screen. Rendered once here so it
+          floats above all tabs via fixed positioning; doesn't participate
+          in the sidebar/tab layout at all. */}
+      <AIAssistant />
     </div>
   );
 }
